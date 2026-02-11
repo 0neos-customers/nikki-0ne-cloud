@@ -55,12 +55,13 @@ const DAY_OPTIONS = [
 ]
 
 // Status options for editable one-off posts
-const EDITABLE_ONEOFF_STATUSES: OneOffPostStatus[] = ['draft', 'pending']
+const EDITABLE_ONEOFF_STATUSES: OneOffPostStatus[] = ['draft', 'approved', 'pending']
 const READONLY_ONEOFF_STATUSES: OneOffPostStatus[] = ['published', 'posted_manually', 'failed', 'cancelled']
 
 // Display labels for one-off post statuses
 const STATUS_LABELS: Record<OneOffPostStatus, string> = {
   draft: 'Draft',
+  approved: 'Approved',
   pending: 'Scheduled',
   published: 'Published',
   posted_manually: 'Posted Manually',
@@ -848,6 +849,7 @@ export default function SchedulerPage() {
                               </SelectTrigger>
                               <SelectContent>
                                 <SelectItem value="draft">Draft</SelectItem>
+                                <SelectItem value="approved">Approved</SelectItem>
                                 <SelectItem value="pending">Scheduled</SelectItem>
                               </SelectContent>
                             </Select>

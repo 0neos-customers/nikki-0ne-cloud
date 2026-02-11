@@ -7,8 +7,19 @@ export type SchedulerExecutionStatus = 'success' | 'failed' | 'skipped'
 
 /**
  * Status for one-off scheduled posts
+ * Workflow: draft → approved → pending (scheduled for auto-posting) → published
  */
-export type OneOffPostStatus = 'pending' | 'draft' | 'published' | 'posted_manually' | 'failed' | 'cancelled'
+export type OneOffPostStatus = 'pending' | 'draft' | 'approved' | 'published' | 'posted_manually' | 'failed' | 'cancelled'
+
+/**
+ * Status for post library items (approval workflow)
+ */
+export type PostLibraryStatus = 'draft' | 'approved' | 'active'
+
+/**
+ * Source tracking for post library items
+ */
+export type PostLibrarySource = 'manual' | 'api' | 'import'
 
 /**
  * Day of week constants (0 = Sunday, 6 = Saturday)
@@ -88,6 +99,9 @@ export interface SkoolPostLibraryItem {
   is_active: boolean
   last_used_at: string | null
   use_count: number
+  status?: PostLibraryStatus // draft, approved, active (has DB default)
+  source?: PostLibrarySource // manual, api, import (has DB default)
+  approved_at?: string | null
   created_at: string
   updated_at: string
   // Joined data (optional)
@@ -196,6 +210,8 @@ export interface SkoolPostLibraryItemInput {
   image_url?: string | null
   video_url?: string | null
   is_active?: boolean
+  status?: PostLibraryStatus
+  source?: PostLibrarySource
 }
 
 /**

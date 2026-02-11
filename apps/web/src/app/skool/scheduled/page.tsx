@@ -15,6 +15,7 @@ import {
 import {
   CalendarClock,
   CheckCircle,
+  CheckCircle2,
   Clock,
   Edit,
   ExternalLink,
@@ -132,10 +133,12 @@ function ScheduledPostsContent() {
 
   const getStatusIcon = (status: OneOffPostStatus) => {
     switch (status) {
-      case 'pending':
-        return <Clock className="h-4 w-4 text-amber-500" />
       case 'draft':
         return <CalendarClock className="h-4 w-4 text-blue-500" />
+      case 'approved':
+        return <CheckCircle2 className="h-4 w-4 text-purple-500" />
+      case 'pending':
+        return <Clock className="h-4 w-4 text-amber-500" />
       case 'published':
       case 'posted_manually':
         return <CheckCircle className="h-4 w-4 text-green-500" />
@@ -150,8 +153,9 @@ function ScheduledPostsContent() {
 
   const getStatusLabel = (status: OneOffPostStatus) => {
     const labels: Record<OneOffPostStatus, string> = {
-      pending: 'Pending',
-      draft: 'Draft (Manual)',
+      draft: 'Draft',
+      approved: 'Approved',
+      pending: 'Scheduled',
       published: 'Published',
       posted_manually: 'Posted Manually',
       failed: 'Failed',
