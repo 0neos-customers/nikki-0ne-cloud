@@ -141,7 +141,7 @@ export function OneOffPostDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[600px] max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>{isEditMode ? 'Edit Scheduled Post' : 'Schedule One-Off Post'}</DialogTitle>
+          <DialogTitle>{isEditMode ? 'Edit Scheduled Post' : 'Schedule Post'}</DialogTitle>
           <DialogDescription>
             {isEditMode
               ? 'Update the scheduled post details below.'
