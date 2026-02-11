@@ -5,9 +5,9 @@
 
 ## Quick Resume
 
-**Last Updated:** 2026-02-10
-**Last Session Focus:** KPI Dashboard Completion - All 6 phases complete (Delete Expense, Daily Snapshots, Historical Trends, Funnel Contacts, Overview Trends, Cohorts EPL/LTV)
-**Next Session Focus:** Manual verification of all KPI Dashboard features using checklist below
+**Last Updated:** 2026-02-11
+**Last Session Focus:** Fixed Vercel deployment (domain config, CRON_SECRET, sync buttons), added "Run All Syncs" button
+**Next Session Focus:** Skool Post Drafts & External API - 4 phases below
 
 > **Revenue Architecture (3 KPIs):**
 > - **Total** = One Time + Recurring
@@ -21,6 +21,209 @@
 > - Payback = CAC / ARPU
 
 > **To resume:** Just say "Read BUILD-STATE.md and continue with the next phase."
+
+---
+
+## Skool Post Drafts & External API 🔄 IN PROGRESS
+
+> **Goal:** Enable One (Claude) to create Skool posts directly from marketing sessions. Posts appear as "drafts" in 0ne-app for Jimmy to review/approve before scheduling.
+
+### Problem Statement
+
+When Jimmy works with One on marketing content (campaigns, workshop promotions, etc.), the posts are created in markdown files. To use them:
+1. Jimmy must manually copy/paste into the 0ne-app Posts Library
+2. No way to stage posts for review before they go live
+3. No API for external systems (One, n8n, Make) to create posts
+
+### Solution
+
+1. Add `status` field to posts (draft/approved/published)
+2. Build authenticated API endpoint for external post creation
+3. Update UI to show drafts and allow approval workflow
+
+---
+
+### Phase 1: Database Schema Update
+**Scope:** Add status field and approval tracking to skool_post_library
+
+#### 1.1 Create Migration File
+**File:** `packages/db/schemas/skool-post-status.sql` (NEW)
+
+```sql
+-- Add status field to skool_post_library
+-- Values: 'draft' (created by API), 'approved' (ready for scheduling), 'active' (legacy, same as approved)
+ALTER TABLE skool_post_library
+ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'active'
+  CHECK (status IN ('draft', 'approved', 'active'));
+
+-- Add source tracking (who created the post)
+ALTER TABLE skool_post_library
+ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'manual'
+  CHECK (source IN ('manual', 'api', 'import'));
+
+-- Add approval tracking
+ALTER TABLE skool_post_library
+ADD COLUMN IF NOT EXISTS approved_at TIMESTAMPTZ;
+
+-- Index for status filtering
+CREATE INDEX IF NOT EXISTS idx_skool_post_library_status
+  ON skool_post_library(status);
+
+-- Update existing posts to 'active' status (already approved)
+UPDATE skool_post_library SET status = 'active' WHERE status IS NULL;
+```
+
+- [ ] Create migration file
+- [ ] Run migration on Supabase
+- [ ] Verify existing posts have 'active' status
+
+**Acceptance:** All posts have status field, existing posts are 'active'
+
+---
+
+### Phase 2: External Post Creation API
+**Scope:** Build authenticated endpoint for One/external systems to create posts
+
+#### 2.1 Create API Key Infrastructure
+**File:** `apps/web/src/app/api/external/auth.ts` (NEW)
+- [ ] Create API key validation helper
+- [ ] Use `EXTERNAL_API_KEY` environment variable
+- [ ] Return 401 if key missing or invalid
+
+#### 2.2 Create Posts API Endpoint
+**File:** `apps/web/src/app/api/external/skool/posts/route.ts` (NEW)
+- [ ] POST: Create new post(s) with `status: 'draft'`
+- [ ] GET: List posts by status (for verification)
+- [ ] Accept array of posts for batch creation
+- [ ] Validate required fields (title, body)
+- [ ] Optional fields: category, variation_group_id, image_url
+
+**Request Format:**
+```json
+{
+  "posts": [
+    {
+      "title": "🔥 The Money Room is LIVE",
+      "body": "Join us now for...",
+      "category": "The Money Room",
+      "variation_group_id": "uuid-optional",
+      "image_url": "https://..."
+    }
+  ],
+  "campaign_name": "February Workshop Promo"
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "created": 5,
+  "post_ids": ["uuid-1", "uuid-2", ...],
+  "message": "5 posts created as drafts. Review at /skool/posts?status=draft"
+}
+```
+
+- [ ] Implement POST endpoint
+- [ ] Implement GET endpoint (status filter)
+- [ ] Add request validation
+- [ ] Add error handling
+- [ ] Add to Vercel environment: `EXTERNAL_API_KEY`
+
+**Acceptance:** Can create posts via curl with API key, posts appear as drafts
+
+---
+
+### Phase 3: UI Updates - Draft Management
+**Scope:** Update Posts Library to show drafts and allow approval
+
+#### 3.1 Update Posts API
+**File:** `apps/web/src/app/api/skool/posts/route.ts`
+- [ ] Add `status` filter parameter
+- [ ] Return status field in response
+- [ ] Default to showing all statuses (or approved+active only)
+
+#### 3.2 Update Posts Library Hook
+**File:** `apps/web/src/features/skool/hooks/use-post-library.ts`
+- [ ] Add `status` filter option
+- [ ] Add `approvePost()` function
+- [ ] Add `bulkApprove()` function
+
+#### 3.3 Update Posts Library Page
+**File:** `apps/web/src/app/skool/posts/page.tsx`
+- [ ] Add status filter dropdown (All, Drafts, Approved, Active)
+- [ ] Show status badge on each post row
+- [ ] Add "Approve" button for draft posts
+- [ ] Add "Approve All Drafts" bulk action
+- [ ] Draft posts show yellow/amber badge
+- [ ] Approved posts show green badge
+
+#### 3.4 Update Post Dialog
+**File:** `apps/web/src/features/skool/components/PostDialog.tsx`
+- [ ] Show status dropdown when editing
+- [ ] Auto-set status to 'approved' on manual creation
+- [ ] Show source badge (Manual, API, Import)
+
+**Acceptance:** Can filter by status, approve drafts, bulk approve
+
+---
+
+### Phase 4: Scheduler Integration
+**Scope:** Only schedule approved/active posts, not drafts
+
+#### 4.1 Update Cron Job
+**File:** `apps/web/src/app/api/cron/skool-post-scheduler/route.ts`
+- [ ] Filter posts by `status IN ('approved', 'active')`
+- [ ] Ensure drafts are never auto-published
+- [ ] Log if a scheduler has no approved posts available
+
+#### 4.2 Update Helper Functions
+**File:** `packages/db/schemas/skool-post-status.sql` (add to migration)
+- [ ] Update `get_next_post_for_variation_group()` to filter by status
+- [ ] Update `get_next_post_for_schedule()` to filter by status
+
+**Acceptance:** Drafts never published automatically, only approved posts used
+
+---
+
+### Verification Checklist
+
+**API Creation:**
+- [ ] `curl -X POST -H "X-API-Key: $KEY" -d '{"posts":[...]}' .../api/external/skool/posts`
+- [ ] Posts appear in database with status='draft', source='api'
+- [ ] Invalid API key returns 401
+- [ ] Missing fields returns 400 with helpful error
+
+**UI Workflow:**
+- [ ] Posts Library shows status filter dropdown
+- [ ] Drafts show amber badge, "Approve" button
+- [ ] Clicking Approve changes status to 'approved'
+- [ ] Bulk Approve works for multiple drafts
+
+**Scheduler:**
+- [ ] Only approved/active posts are published
+- [ ] Drafts are skipped even if matched by variation group
+
+---
+
+### One Integration (Post-Build)
+
+After this feature is complete, One can create posts via:
+
+```bash
+# From Claude Code terminal
+curl -X POST "https://app.project0ne.ai/api/external/skool/posts" \
+  -H "X-API-Key: $EXTERNAL_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "posts": [
+      {"title": "...", "body": "...", "category": "The Money Room"}
+    ],
+    "campaign_name": "Q1 Workshop Promo"
+  }'
+```
+
+Posts appear in 0ne-app → Skool → Posts Library → filter by "Drafts" → Review → Approve
 
 ---
 
