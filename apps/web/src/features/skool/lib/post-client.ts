@@ -365,13 +365,20 @@ export async function getCategories(
       return { error: 'SKOOL_COOKIES environment variable is not set' }
     }
 
-    // Fetch the community page which contains __NEXT_DATA__
-    const pageUrl = `https://www.skool.com/${groupSlug}/community`
+    // Extract WAF token from cookies (required by Skool's CloudFront)
+    const wafTokenMatch = cookies.match(/aws-waf-token=([^;]+)/)
+    const wafToken = wafTokenMatch ? wafTokenMatch[1] : ''
+
+    // Fetch the about page which contains __NEXT_DATA__ with labels
+    const pageUrl = `https://www.skool.com/${groupSlug}/about`
     console.log(`[PostClient] Fetching page: ${pageUrl}`)
 
     const response = await fetch(pageUrl, {
       headers: {
         cookie: cookies,
+        'x-aws-waf-token': wafToken,
+        origin: 'https://www.skool.com',
+        referer: 'https://www.skool.com/',
         'user-agent':
           'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -395,34 +402,30 @@ export async function getCategories(
     console.log(`[PostClient] Parsed __NEXT_DATA__, looking for labels/categories...`)
 
     // Navigate to find labels in the page props
-    // Structure: props.pageProps.group.labels or similar
+    // Structure: props.pageProps.currentGroup.labels (from /about page)
     const pageProps = nextData?.props?.pageProps
     if (!pageProps) {
       return { error: 'Could not find pageProps in __NEXT_DATA__' }
     }
 
-    // Try different paths where labels might be stored
-    const labels =
-      pageProps.group?.labels ||
-      pageProps.labels ||
-      pageProps.community?.labels ||
-      pageProps.initialData?.group?.labels
+    // Labels are in currentGroup.labels on the about page
+    const labels = pageProps.currentGroup?.labels
 
     if (!labels || !Array.isArray(labels)) {
       console.log(`[PostClient] pageProps keys:`, Object.keys(pageProps))
-      if (pageProps.group) {
-        console.log(`[PostClient] group keys:`, Object.keys(pageProps.group))
+      if (pageProps.currentGroup) {
+        console.log(`[PostClient] currentGroup keys:`, Object.keys(pageProps.currentGroup))
       }
       return { error: 'Could not find labels array in page data' }
     }
 
-    console.log(`[PostClient] Found ${labels.length} categories:`, JSON.stringify(labels, null, 2))
+    console.log(`[PostClient] Found ${labels.length} categories`)
 
-    // Map to our format
-    return labels.map((label: { id: string; name: string; position?: number }, index: number) => ({
+    // Map to our format - Skool uses metadata.displayName for the name
+    return labels.map((label: { id: string; metadata?: { displayName?: string }; createdAt?: string }, index: number) => ({
       id: label.id,
-      name: label.name,
-      position: label.position ?? index,
+      name: label.metadata?.displayName || `Category ${index + 1}`,
+      position: index,
     }))
   } catch (error) {
     console.error('[PostClient] Error fetching categories:', error)
