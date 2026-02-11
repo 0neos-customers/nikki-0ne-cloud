@@ -10,13 +10,11 @@ import {
   GraduationCap,
   Building2,
   Calendar,
-  CalendarClock,
   FileText,
   FolderOpen,
   History,
   Layers,
   Megaphone,
-  RefreshCw,
   Upload,
   type LucideIcon,
 } from 'lucide-react'
@@ -102,10 +100,9 @@ export function getAppNavigation(appId: AppId): AppNavItem[] {
     case 'skoolScheduler':
       return [
         { name: 'Overview', href: '/skool', icon: LayoutDashboard },
-        { name: 'Recurring', href: '/skool/scheduler', icon: RefreshCw },
+        { name: 'Scheduler', href: '/skool/scheduler', icon: Calendar },
         { name: 'Variation Groups', href: '/skool/groups', icon: Layers },
         { name: 'Campaigns', href: '/skool/campaigns', icon: Megaphone },
-        { name: 'Scheduled', href: '/skool/scheduled', icon: CalendarClock },
         { name: 'Posts Library', href: '/skool/posts', icon: FileText },
         { name: 'Execution Log', href: '/skool/log', icon: History },
       ]
