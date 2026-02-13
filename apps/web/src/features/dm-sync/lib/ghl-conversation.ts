@@ -783,3 +783,110 @@ export function createGhlConversationProviderClientFromEnv(
     conversationProviderId,
   })
 }
+
+// =============================================================================
+// CONVERSATION PROVIDER REGISTRATION
+// =============================================================================
+
+/**
+ * Response from GHL conversation provider registration
+ */
+export interface ConversationProviderRegistrationResponse {
+  providerId: string
+  name: string
+  description?: string
+  type?: string
+}
+
+/**
+ * Register a new Conversation Provider with GHL
+ *
+ * This is a one-time setup operation that registers your app as a custom
+ * channel in the GHL unified inbox. Once registered, you receive a providerId
+ * that must be stored and used for all subsequent message operations.
+ *
+ * @param config - Marketplace credentials (clientId, clientSecret)
+ * @param locationId - GHL location ID to register the provider for
+ * @param appUrl - Your deployed app URL (e.g., https://0ne-app.vercel.app)
+ * @returns Provider registration details including the providerId
+ *
+ * @example
+ * ```ts
+ * const result = await registerConversationProvider(
+ *   {
+ *     clientId: process.env.GHL_MARKETPLACE_CLIENT_ID!,
+ *     clientSecret: process.env.GHL_MARKETPLACE_CLIENT_SECRET!,
+ *   },
+ *   'loc_123',
+ *   'https://0ne-app.vercel.app'
+ * )
+ * console.log('Provider ID:', result.providerId)
+ * // Add to .env: GHL_CONVERSATION_PROVIDER_ID=result.providerId
+ * ```
+ */
+export async function registerConversationProvider(
+  config: { clientId: string; clientSecret: string },
+  locationId: string,
+  appUrl: string
+): Promise<ConversationProviderRegistrationResponse> {
+  // First, get an OAuth token using client credentials
+  const tokenResponse = await fetch(GHL_OAUTH_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: new URLSearchParams({
+      grant_type: 'client_credentials',
+      client_id: config.clientId,
+      client_secret: config.clientSecret,
+    }),
+  })
+
+  if (!tokenResponse.ok) {
+    const errorText = await tokenResponse.text()
+    throw new Error(`OAuth token request failed: ${tokenResponse.status} - ${errorText}`)
+  }
+
+  const tokenData = (await tokenResponse.json()) as OAuthTokenResponse
+  const accessToken = tokenData.access_token
+
+  // Register the conversation provider
+  const registrationBody = {
+    locationId,
+    name: 'Skool',
+    description: 'Skool community DMs synced to GHL inbox',
+    type: 'Custom',
+    outboundWebhookUrl: `${appUrl}/api/webhooks/ghl/outbound-message`,
+  }
+
+  console.log('[GHL Provider] Registering conversation provider:', {
+    locationId,
+    name: registrationBody.name,
+    outboundWebhookUrl: registrationBody.outboundWebhookUrl,
+  })
+
+  const response = await fetch(`${GHL_API_BASE}/conversations/providers`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+      Version: '2021-07-28',
+    },
+    body: JSON.stringify(registrationBody),
+  })
+
+  if (!response.ok) {
+    const errorData = (await response.json().catch(() => ({}))) as GhlApiError
+    const errorMessage = errorData.message || errorData.error || response.statusText
+    throw new Error(`GHL provider registration failed: ${response.status} - ${errorMessage}`)
+  }
+
+  const result = (await response.json()) as ConversationProviderRegistrationResponse
+
+  console.log('[GHL Provider] Registration successful:', {
+    providerId: result.providerId,
+    name: result.name,
+  })
+
+  return result
+}
