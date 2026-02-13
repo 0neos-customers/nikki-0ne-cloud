@@ -84,12 +84,14 @@ async function main() {
   // Validate required environment variables
   const clientId = env.GHL_MARKETPLACE_CLIENT_ID
   const clientSecret = env.GHL_MARKETPLACE_CLIENT_SECRET
+  const refreshToken = env.GHL_MARKETPLACE_REFRESH_TOKEN
   const locationId = env.GHL_LOCATION_ID
   const appUrl = env.NEXT_PUBLIC_APP_URL
 
   const missing: string[] = []
   if (!clientId) missing.push('GHL_MARKETPLACE_CLIENT_ID')
   if (!clientSecret) missing.push('GHL_MARKETPLACE_CLIENT_SECRET')
+  if (!refreshToken) missing.push('GHL_MARKETPLACE_REFRESH_TOKEN')
   if (!locationId) missing.push('GHL_LOCATION_ID')
   if (!appUrl) missing.push('NEXT_PUBLIC_APP_URL')
 
@@ -97,6 +99,14 @@ async function main() {
     console.error('Missing required environment variables:')
     missing.forEach((v) => console.error(`  - ${v}`))
     console.error()
+    if (missing.includes('GHL_MARKETPLACE_REFRESH_TOKEN')) {
+      console.error('To get your refresh token:')
+      console.error('1. Deploy your app to Vercel first')
+      console.error('2. Visit: ' + (appUrl || 'https://your-app.vercel.app') + '/api/auth/ghl/callback')
+      console.error('3. Click "Authorize with GHL" and follow the OAuth flow')
+      console.error('4. Copy the refresh token to your .env.local and Vercel env')
+      console.error()
+    }
     console.error('Please add these to your .env.local file.')
     process.exit(1)
   }
@@ -123,7 +133,7 @@ async function main() {
 
   try {
     const result = await registerConversationProvider(
-      { clientId: clientId!, clientSecret: clientSecret! },
+      { clientId: clientId!, clientSecret: clientSecret!, refreshToken: refreshToken! },
       locationId!,
       appUrl!
     )

@@ -41,6 +41,8 @@ export interface GhlMarketplaceConfig {
   clientSecret: string
   locationId: string
   conversationProviderId?: string
+  /** Initial refresh token from OAuth authorization flow */
+  refreshToken?: string
 }
 
 /**
@@ -112,16 +114,21 @@ export class GhlConversationProviderClient {
   private clientSecret: string
   private locationId: string
   private conversationProviderId: string
+  private initialRefreshToken?: string
 
   constructor(config: GhlMarketplaceConfig) {
     this.clientId = config.clientId
     this.clientSecret = config.clientSecret
     this.locationId = config.locationId
     this.conversationProviderId = config.conversationProviderId || ''
+    this.initialRefreshToken = config.refreshToken
   }
 
   /**
    * Get OAuth access token, refreshing if necessary
+   *
+   * GHL Marketplace apps MUST use refresh_token grant type.
+   * The initial refresh token comes from the OAuth authorization flow.
    */
   private async getAccessToken(): Promise<string> {
     const cacheKey = `${this.clientId}:${this.locationId}`
@@ -132,19 +139,19 @@ export class GhlConversationProviderClient {
       return cached.accessToken
     }
 
-    // Refresh token if we have one
-    if (cached?.refreshToken) {
-      try {
-        const newToken = await this.refreshToken(cached.refreshToken)
-        tokenCache.set(cacheKey, newToken)
-        return newToken.accessToken
-      } catch (error) {
-        console.error('[GHL Provider] Token refresh failed, will use client credentials:', error)
-      }
+    // Determine which refresh token to use
+    const refreshTokenToUse = cached?.refreshToken || this.initialRefreshToken
+
+    if (!refreshTokenToUse) {
+      throw new Error(
+        'GHL OAuth requires a refresh token. ' +
+        'Visit /api/auth/ghl/callback to authorize the app and get your refresh token, ' +
+        'then add GHL_MARKETPLACE_REFRESH_TOKEN to your environment.'
+      )
     }
 
-    // Get new token using client credentials
-    const newToken = await this.getClientCredentialsToken()
+    // Refresh the token
+    const newToken = await this.refreshToken(refreshTokenToUse)
     tokenCache.set(cacheKey, newToken)
     return newToken.accessToken
   }
@@ -769,10 +776,18 @@ export function createGhlConversationProviderClientFromEnv(
 ): GhlConversationProviderClient {
   const clientId = process.env.GHL_MARKETPLACE_CLIENT_ID
   const clientSecret = process.env.GHL_MARKETPLACE_CLIENT_SECRET
+  const refreshToken = process.env.GHL_MARKETPLACE_REFRESH_TOKEN
 
   if (!clientId || !clientSecret) {
     throw new Error(
       'GHL_MARKETPLACE_CLIENT_ID and GHL_MARKETPLACE_CLIENT_SECRET environment variables are required'
+    )
+  }
+
+  if (!refreshToken) {
+    throw new Error(
+      'GHL_MARKETPLACE_REFRESH_TOKEN is required. ' +
+      'Visit /api/auth/ghl/callback to authorize the app and get your refresh token.'
     )
   }
 
@@ -781,6 +796,7 @@ export function createGhlConversationProviderClientFromEnv(
     clientSecret,
     locationId,
     conversationProviderId,
+    refreshToken,
   })
 }
 
@@ -825,20 +841,22 @@ export interface ConversationProviderRegistrationResponse {
  * ```
  */
 export async function registerConversationProvider(
-  config: { clientId: string; clientSecret: string },
+  config: { clientId: string; clientSecret: string; refreshToken: string },
   locationId: string,
   appUrl: string
 ): Promise<ConversationProviderRegistrationResponse> {
-  // First, get an OAuth token using client credentials
+  // Get an access token using the refresh token
+  // GHL Marketplace apps MUST use refresh_token grant (client_credentials not supported)
   const tokenResponse = await fetch(GHL_OAUTH_URL, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded',
     },
     body: new URLSearchParams({
-      grant_type: 'client_credentials',
+      grant_type: 'refresh_token',
       client_id: config.clientId,
       client_secret: config.clientSecret,
+      refresh_token: config.refreshToken,
     }),
   })
 
@@ -849,6 +867,12 @@ export async function registerConversationProvider(
 
   const tokenData = (await tokenResponse.json()) as OAuthTokenResponse
   const accessToken = tokenData.access_token
+
+  // Log if we got a new refresh token (should be stored)
+  if (tokenData.refresh_token && tokenData.refresh_token !== config.refreshToken) {
+    console.log('[GHL Provider] New refresh token received - update your environment:')
+    console.log(`  GHL_MARKETPLACE_REFRESH_TOKEN=${tokenData.refresh_token}`)
+  }
 
   // Register the conversation provider
   const registrationBody = {

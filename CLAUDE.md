@@ -7,7 +7,67 @@
 product/BUILD-STATE.md
 ```
 
-This file tracks what's done, what's in progress, and what to work on next.
+This nimble hub shows what's active and points to the right feature BUILD-STATE.
+
+**Structure:**
+- `product/BUILD-STATE.md` → Quick resume + active feature index
+- `product/sections/{feature}/BUILD-STATE.md` → Feature-specific implementation plans
+- `product/COMPLETED-FEATURES.md` → Archived feature details (read only when needed)
+
+---
+
+## Build Protocol (CRITICAL)
+
+### Multi-Agent Sequential Deployment
+
+**For any non-trivial feature (3+ phases), use this pattern:**
+
+1. **Each phase = 1 agent with fresh context**
+   - Spawn a Task agent for each phase
+   - Agent completes phase → commits (NO push) → returns
+   - Main session orchestrates, agents execute
+
+2. **Phase completion checklist:**
+   - [ ] Code complete
+   - [ ] Tests pass (if applicable)
+   - [ ] Commit with descriptive message
+   - [ ] Update BUILD-STATE checkboxes
+   - [ ] NO push (Jimmy will push)
+
+3. **Before deploying phases, ask:**
+   > "Deploy all phases now, or pause between each?"
+
+### Why Agents?
+
+- **Fresh context window:** Each agent starts clean, avoiding context exhaustion
+- **Parallel execution:** Multiple independent phases can run simultaneously
+- **Atomic commits:** Each phase is a complete, reviewable unit
+- **Resumability:** If interrupted, just deploy the next phase
+
+### When to Use Agents
+
+| Scenario | Approach |
+|----------|----------|
+| Single file change | Direct edit (no agent) |
+| 2-3 related changes | Direct edit (no agent) |
+| Multi-file feature phase | Use Task agent |
+| Database + API + UI | Use Task agent |
+| Research/exploration | Use Explore agent |
+
+---
+
+## Session Protocol
+
+**At session START:**
+1. Read `product/BUILD-STATE.md`
+2. Identify current focus from "Active Features" table
+3. Read the relevant section BUILD-STATE (if working on specific feature)
+4. Continue from where it left off
+
+**At session END:**
+1. Update section BUILD-STATE checkboxes
+2. Update root BUILD-STATE "Current Focus" if changed
+3. Commit work (NO push unless asked)
 
 ---
 
@@ -17,8 +77,9 @@ This file tracks what's done, what's in progress, and what to work on next.
 
 **Apps included:**
 - KPI Dashboard - Business metrics and funnel tracking
-- Prospector - Facebook lead engagement tool
+- Skool Scheduler - Automated post publishing
 - Skool Sync - Sync Skool messages with GoHighLevel CRM
+- GHL Media Manager - Media library management
 
 ---
 
@@ -39,9 +100,13 @@ This file tracks what's done, what's in progress, and what to work on next.
 
 ```
 0ne-app/
-├── product/                 ← DesignOS specs (READ BUILD-STATE.md FIRST)
-│   ├── BUILD-STATE.md       ← Session tracking
-│   ├── sections/            ← Per-section specs
+├── product/                 ← Specs and build tracking
+│   ├── BUILD-STATE.md       ← Nimble hub (read FIRST)
+│   ├── COMPLETED-FEATURES.md← Archived features
+│   └── sections/            ← Per-feature BUILD-STATEs
+│       ├── skool-sync/BUILD-STATE.md
+│       ├── skool-scheduler/BUILD-STATE.md
+│       └── media/BUILD-STATE.md
 ├── apps/
 │   └── web/                 ← Next.js app
 │       └── src/
@@ -76,20 +141,18 @@ cd apps/web && bun dev
 # Install dependencies
 bun install
 
-# Database
-bunx supabase start
+# Database migrations
+psql "$DATABASE_URL" -f packages/db/schemas/{migration}.sql
+
+# Run cron manually
+curl -H "Authorization: Bearer $CRON_SECRET" "http://localhost:3000/api/cron/{job}"
 ```
 
 ---
 
-## Session Protocol
+## Git Protocol
 
-**At session START:**
-1. Read `product/BUILD-STATE.md`
-2. Continue from "Next Session Focus"
-
-**At session END:**
-1. Update `product/BUILD-STATE.md` checkboxes
-2. Update "Last Updated" date
-3. Update "Next Session Focus"
-4. Note any blockers
+- **Commit after each phase** (not after each file)
+- **NO push** unless Jimmy explicitly asks
+- **Descriptive messages:** `Phase X: {what was built}`
+- **Co-Author:** Include `Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>`
