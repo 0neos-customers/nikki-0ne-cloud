@@ -32,7 +32,7 @@ export async function GET(request: Request) {
   if (!code) {
     // If no code, show instructions to start OAuth flow
     const clientId = process.env.GHL_MARKETPLACE_CLIENT_ID
-    const redirectUri = `${process.env.NEXT_PUBLIC_APP_URL}/api/auth/ghl/callback`
+    const redirectUri = `${process.env.NEXT_PUBLIC_APP_URL}/api/auth/marketplace/callback`
 
     const authUrl = `https://marketplace.gohighlevel.com/oauth/chooselocation?response_type=code&redirect_uri=${encodeURIComponent(redirectUri)}&client_id=${clientId}&scope=conversations.readonly%20conversations.write%20conversations/message.readonly%20conversations/message.write%20contacts.readonly%20contacts.write`
 
@@ -75,7 +75,7 @@ export async function GET(request: Request) {
         client_id: process.env.GHL_MARKETPLACE_CLIENT_ID!,
         client_secret: process.env.GHL_MARKETPLACE_CLIENT_SECRET!,
         code,
-        redirect_uri: `${process.env.NEXT_PUBLIC_APP_URL}/api/auth/ghl/callback`,
+        redirect_uri: `${process.env.NEXT_PUBLIC_APP_URL}/api/auth/marketplace/callback`,
       }),
     })
 
