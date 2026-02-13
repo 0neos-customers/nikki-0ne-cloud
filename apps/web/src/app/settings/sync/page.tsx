@@ -1,6 +1,7 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
+import useSWR from 'swr'
 import {
   Card,
   CardContent,
@@ -25,7 +26,7 @@ import {
   TableHeader,
   TableRow,
 } from '@0ne/ui'
-import { RefreshCw, Loader2, CheckCircle2, XCircle, Clock, Play, Calendar, PlayCircle } from 'lucide-react'
+import { RefreshCw, Loader2, CheckCircle2, XCircle, Clock, Play, Calendar, PlayCircle, MessageSquare, ArrowDownLeft, ArrowUpRight, Users, Inbox } from 'lucide-react'
 import { AppShell } from '@/components/shell'
 import {
   useSyncLog,
@@ -37,15 +38,22 @@ import {
 } from '@/features/settings/hooks'
 import type { CronJobWithStatus } from '@/features/settings/lib/cron-registry'
 import type { SyncType, SyncStatus } from '@/lib/sync-log'
+import { getNextRun, formatRelativeTime } from '@/features/settings/lib/cron-parser'
 
 // Valid sync types for the filter dropdown
 const SYNC_TYPES: { value: SyncType | 'all'; label: string }[] = [
   { value: 'all', label: 'All Types' },
   { value: 'ghl_contacts', label: 'GHL Contacts' },
   { value: 'ghl_payments', label: 'GHL Payments' },
-  { value: 'skool', label: 'Skool' },
+  { value: 'skool', label: 'Skool Members' },
   { value: 'skool_analytics', label: 'Skool Analytics' },
-  { value: 'skool_member_history', label: 'Skool Member History' },
+  { value: 'skool_member_history', label: 'Member History' },
+  { value: 'skool_posts', label: 'Skool Posts' },
+  { value: 'skool_dms', label: 'Skool DMs (Inbound)' },
+  { value: 'skool_dms_outbound', label: 'Skool DMs (Outbound)' },
+  { value: 'hand_raiser', label: 'Hand-Raiser Monitor' },
+  { value: 'aggregate', label: 'Daily Aggregation' },
+  { value: 'daily_snapshot', label: 'Daily Snapshot' },
   { value: 'meta', label: 'Meta Ads' },
 ]
 
@@ -76,6 +84,246 @@ function StatusBadge({ status }: { status: SyncStatus }) {
     default:
       return <Badge variant="outline">{status}</Badge>
   }
+}
+
+// Status dot component for CronGrid
+type CronStatus = 'completed' | 'running' | 'failed' | 'never_run' | 'stale'
+
+function StatusDot({ status }: { status: CronStatus }) {
+  const colors: Record<CronStatus, string> = {
+    completed: 'bg-green-500',
+    running: 'bg-blue-500 animate-pulse',
+    failed: 'bg-red-500',
+    never_run: 'bg-yellow-500',
+    stale: 'bg-yellow-500',
+  }
+
+  const titles: Record<CronStatus, string> = {
+    completed: 'Last run completed successfully',
+    running: 'Currently running',
+    failed: 'Last run failed',
+    never_run: 'Never run',
+    stale: 'Stale - last run was more than expected',
+  }
+
+  return (
+    <div
+      className={`w-2.5 h-2.5 rounded-full ${colors[status]}`}
+      title={titles[status]}
+    />
+  )
+}
+
+// Determine cron status based on last run
+function getCronStatus(schedule: CronJobWithStatus): CronStatus {
+  if (!schedule.lastRun) return 'never_run'
+
+  const { status, startedAt } = schedule.lastRun
+
+  if (status === 'running') return 'running'
+  if (status === 'failed') return 'failed'
+
+  // Check if stale (last run was more than 2x the expected interval ago)
+  const lastRunDate = new Date(startedAt)
+  const nextExpectedRun = getNextRun(schedule.cronExpression)
+  const expectedInterval = nextExpectedRun.getTime() - Date.now()
+  const timeSinceLastRun = Date.now() - lastRunDate.getTime()
+
+  // If last run was more than 2x the expected interval, mark as stale
+  if (timeSinceLastRun > Math.abs(expectedInterval) * 2) {
+    return 'stale'
+  }
+
+  return 'completed'
+}
+
+// CronGrid component - table view of all crons
+function CronGrid({
+  schedules,
+  runningCrons,
+  onRunNow,
+}: {
+  schedules: CronJobWithStatus[]
+  runningCrons: Record<string, boolean>
+  onRunNow: (cronId: string) => void
+}) {
+  // Force re-render every minute to update relative times
+  const [, setTick] = useState(0)
+  useEffect(() => {
+    const interval = setInterval(() => setTick((t) => t + 1), 60000)
+    return () => clearInterval(interval)
+  }, [])
+
+  return (
+    <div className="rounded-md border">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead className="w-[40px]">Status</TableHead>
+            <TableHead className="w-[180px]">Name</TableHead>
+            <TableHead className="w-[140px]">Schedule</TableHead>
+            <TableHead className="w-[120px]">Last Run</TableHead>
+            <TableHead className="w-[120px]">Next Run</TableHead>
+            <TableHead className="w-[100px] text-right">Action</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {schedules.map((schedule) => {
+            const status = getCronStatus(schedule)
+            const isRunning = runningCrons[schedule.id] || schedule.lastRun?.status === 'running'
+            const nextRun = getNextRun(schedule.cronExpression)
+
+            return (
+              <TableRow key={schedule.id}>
+                <TableCell>
+                  <StatusDot status={status} />
+                </TableCell>
+                <TableCell>
+                  <div>
+                    <p className="font-medium">{schedule.name}</p>
+                    <p className="text-xs text-muted-foreground truncate max-w-[160px]" title={schedule.description}>
+                      {schedule.description}
+                    </p>
+                  </div>
+                </TableCell>
+                <TableCell className="text-sm text-muted-foreground">
+                  {schedule.schedule}
+                </TableCell>
+                <TableCell className="text-sm">
+                  {schedule.lastRun ? (
+                    <span title={formatDateTime(schedule.lastRun.startedAt)}>
+                      {formatRelativeTime(schedule.lastRun.startedAt)}
+                    </span>
+                  ) : (
+                    <span className="text-muted-foreground">Never</span>
+                  )}
+                </TableCell>
+                <TableCell className="text-sm">
+                  <span title={nextRun.toLocaleString()}>
+                    {formatRelativeTime(nextRun)}
+                  </span>
+                </TableCell>
+                <TableCell className="text-right">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => onRunNow(schedule.id)}
+                    disabled={isRunning}
+                    className="h-8 px-2"
+                  >
+                    {isRunning ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Play className="h-4 w-4" />
+                    )}
+                  </Button>
+                </TableCell>
+              </TableRow>
+            )
+          })}
+        </TableBody>
+      </Table>
+    </div>
+  )
+}
+
+// DM Sync Stats types and fetcher
+interface DMSyncStats {
+  inbound24h: number
+  outbound24h: number
+  totalMappings: number
+  pendingQueue: number
+}
+
+const dmStatsFetcher = async (url: string): Promise<DMSyncStats> => {
+  const res = await fetch(url)
+  if (!res.ok) throw new Error('Failed to fetch DM stats')
+  return res.json()
+}
+
+// DMSyncStats component
+function DMSyncStats() {
+  const { data, error, isLoading } = useSWR<DMSyncStats>(
+    '/api/settings/dm-sync-stats',
+    dmStatsFetcher,
+    { refreshInterval: 60000 } // Refresh every minute
+  )
+
+  if (error) {
+    return (
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base flex items-center gap-2">
+            <MessageSquare className="h-4 w-4" />
+            DM Sync Stats
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-sm text-red-600">Failed to load DM stats</p>
+        </CardContent>
+      </Card>
+    )
+  }
+
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-base flex items-center gap-2">
+          <MessageSquare className="h-4 w-4" />
+          DM Sync Stats
+        </CardTitle>
+        <CardDescription>Last 24 hours</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="rounded-lg border bg-card p-3">
+            <div className="flex items-center gap-2 text-muted-foreground mb-1">
+              <ArrowDownLeft className="h-3.5 w-3.5" />
+              <span className="text-xs">Inbound</span>
+            </div>
+            {isLoading ? (
+              <div className="h-7 w-12 bg-muted animate-pulse rounded" />
+            ) : (
+              <p className="text-xl font-semibold">{data?.inbound24h ?? 0}</p>
+            )}
+          </div>
+          <div className="rounded-lg border bg-card p-3">
+            <div className="flex items-center gap-2 text-muted-foreground mb-1">
+              <ArrowUpRight className="h-3.5 w-3.5" />
+              <span className="text-xs">Outbound</span>
+            </div>
+            {isLoading ? (
+              <div className="h-7 w-12 bg-muted animate-pulse rounded" />
+            ) : (
+              <p className="text-xl font-semibold">{data?.outbound24h ?? 0}</p>
+            )}
+          </div>
+          <div className="rounded-lg border bg-card p-3">
+            <div className="flex items-center gap-2 text-muted-foreground mb-1">
+              <Users className="h-3.5 w-3.5" />
+              <span className="text-xs">Mappings</span>
+            </div>
+            {isLoading ? (
+              <div className="h-7 w-12 bg-muted animate-pulse rounded" />
+            ) : (
+              <p className="text-xl font-semibold">{data?.totalMappings ?? 0}</p>
+            )}
+          </div>
+          <div className="rounded-lg border bg-card p-3">
+            <div className="flex items-center gap-2 text-muted-foreground mb-1">
+              <Inbox className="h-3.5 w-3.5" />
+              <span className="text-xs">Pending</span>
+            </div>
+            {isLoading ? (
+              <div className="h-7 w-12 bg-muted animate-pulse rounded" />
+            ) : (
+              <p className="text-xl font-semibold">{data?.pendingQueue ?? 0}</p>
+            )}
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  )
 }
 
 // Activity Table component
@@ -327,6 +575,7 @@ function ScheduleCard({
 // Schedules Tab content
 function SchedulesTab() {
   const [isRunningAll, setIsRunningAll] = useState(false)
+  const [viewMode, setViewMode] = useState<'grid' | 'cards'>('grid')
   const { schedules, isLoading, error, runningCrons, runSync, refresh } = useSchedules()
 
   const handleRunNow = async (cronId: string) => {
@@ -379,9 +628,29 @@ function SchedulesTab() {
     <div className="space-y-4">
       {/* Header with Run All and refresh */}
       <div className="flex items-center justify-between">
-        <p className="text-sm text-muted-foreground">
-          {schedules.length} scheduled sync jobs
-        </p>
+        <div className="flex items-center gap-4">
+          <p className="text-sm text-muted-foreground">
+            {schedules.length} scheduled sync jobs
+          </p>
+          <div className="flex items-center border rounded-md">
+            <Button
+              variant={viewMode === 'grid' ? 'secondary' : 'ghost'}
+              size="sm"
+              className="h-7 px-2 rounded-r-none"
+              onClick={() => setViewMode('grid')}
+            >
+              Table
+            </Button>
+            <Button
+              variant={viewMode === 'cards' ? 'secondary' : 'ghost'}
+              size="sm"
+              className="h-7 px-2 rounded-l-none"
+              onClick={() => setViewMode('cards')}
+            >
+              Cards
+            </Button>
+          </div>
+        </div>
         <div className="flex items-center gap-2">
           <Button
             variant="default"
@@ -408,21 +677,29 @@ function SchedulesTab() {
         </div>
       </div>
 
-      {/* Schedule cards grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {schedules.map((schedule) => (
-          <ScheduleCard
-            key={schedule.id}
-            schedule={schedule}
-            isRunning={runningCrons[schedule.id] || false}
-            onRunNow={() => handleRunNow(schedule.id)}
-          />
-        ))}
-      </div>
+      {/* View mode content */}
+      {viewMode === 'grid' ? (
+        <CronGrid
+          schedules={schedules}
+          runningCrons={runningCrons}
+          onRunNow={handleRunNow}
+        />
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {schedules.map((schedule) => (
+            <ScheduleCard
+              key={schedule.id}
+              schedule={schedule}
+              isRunning={runningCrons[schedule.id] || false}
+              onRunNow={() => handleRunNow(schedule.id)}
+            />
+          ))}
+        </div>
+      )}
 
       {/* Info text */}
       <p className="text-xs text-muted-foreground text-center mt-4">
-        Click "Run All Syncs" to trigger all jobs, or "Run Now" on individual cards. Syncs run in the background.
+        Click "Run All Syncs" to trigger all jobs, or "Run Now" on individual rows. Syncs run in the background.
       </p>
     </div>
   )
@@ -439,6 +716,9 @@ export default function SyncPage() {
             Monitor and manage all data sync jobs
           </p>
         </div>
+
+        {/* DM Sync Stats */}
+        <DMSyncStats />
 
         <Card>
           <CardHeader>

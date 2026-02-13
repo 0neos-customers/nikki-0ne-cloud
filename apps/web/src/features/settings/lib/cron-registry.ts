@@ -20,6 +20,8 @@ export interface CronJob {
   description: string
   /** Human-readable schedule (e.g., "Daily at 5:00 AM") */
   schedule: string
+  /** Standard 5-part cron expression (minute hour dayOfMonth month dayOfWeek) */
+  cronExpression: string
   /** API endpoint to trigger the sync */
   endpoint: string
   /** Corresponding sync_type in the activity log */
@@ -50,6 +52,7 @@ export const CRON_REGISTRY: CronJob[] = [
     name: 'GHL Contacts',
     description: 'Sync contacts from GoHighLevel CRM',
     schedule: 'Daily at 5:00 AM',
+    cronExpression: '0 5 * * *',
     endpoint: '/api/cron/sync-ghl',
     syncType: 'ghl_contacts',
   },
@@ -58,6 +61,7 @@ export const CRON_REGISTRY: CronJob[] = [
     name: 'GHL Payments',
     description: 'Sync payment transactions from GoHighLevel',
     schedule: 'Daily at 6:00 AM',
+    cronExpression: '0 6 * * *',
     endpoint: '/api/cron/sync-ghl-payments',
     syncType: 'ghl_payments',
   },
@@ -66,6 +70,7 @@ export const CRON_REGISTRY: CronJob[] = [
     name: 'Skool Members',
     description: 'Sync Skool community members',
     schedule: 'Daily at 4:00 AM',
+    cronExpression: '0 4 * * *',
     endpoint: '/api/cron/sync-skool',
     syncType: 'skool',
   },
@@ -74,6 +79,7 @@ export const CRON_REGISTRY: CronJob[] = [
     name: 'Skool Analytics',
     description: 'Sync about page visitor data from Skool',
     schedule: 'Daily at 3:00 AM',
+    cronExpression: '0 3 * * *',
     endpoint: '/api/cron/sync-about-analytics',
     syncType: 'skool_analytics',
   },
@@ -82,6 +88,7 @@ export const CRON_REGISTRY: CronJob[] = [
     name: 'Member History',
     description: 'Sync member growth history snapshots',
     schedule: 'Daily at 3:30 AM',
+    cronExpression: '30 3 * * *',
     endpoint: '/api/cron/sync-member-history',
     syncType: 'skool_member_history',
   },
@@ -90,6 +97,7 @@ export const CRON_REGISTRY: CronJob[] = [
     name: 'Meta Ads',
     description: 'Sync Facebook/Instagram ad metrics',
     schedule: 'Daily at 2:00 AM',
+    cronExpression: '0 2 * * *',
     endpoint: '/api/cron/sync-meta',
     syncType: 'meta',
   },
@@ -98,8 +106,54 @@ export const CRON_REGISTRY: CronJob[] = [
     name: 'Skool Posts',
     description: 'Publish scheduled community posts',
     schedule: 'Every 15 minutes',
+    cronExpression: '*/15 * * * *',
     endpoint: '/api/cron/skool-post-scheduler',
     syncType: 'skool_posts',
+  },
+  {
+    id: 'sync-skool-dms',
+    name: 'Skool DMs (Inbound)',
+    description: 'Sync inbound Skool messages to GHL inbox',
+    schedule: 'Every 5 minutes',
+    cronExpression: '*/5 * * * *',
+    endpoint: '/api/cron/sync-skool-dms',
+    syncType: 'skool_dms',
+  },
+  {
+    id: 'send-pending-dms',
+    name: 'Skool DMs (Outbound)',
+    description: 'Send pending outbound messages via Skool',
+    schedule: 'Every 5 minutes',
+    cronExpression: '*/5 * * * *',
+    endpoint: '/api/cron/send-pending-dms',
+    syncType: 'skool_dms_outbound',
+  },
+  {
+    id: 'hand-raiser-check',
+    name: 'Hand-Raiser Monitor',
+    description: 'Check monitored posts for new comments and queue auto-DMs',
+    schedule: 'Every 15 minutes',
+    cronExpression: '*/15 * * * *',
+    endpoint: '/api/cron/hand-raiser-check',
+    syncType: 'hand_raiser',
+  },
+  {
+    id: 'aggregate',
+    name: 'Daily Aggregation',
+    description: 'Aggregate daily KPI metrics and funnel data',
+    schedule: 'Daily at 7:00 AM',
+    cronExpression: '0 7 * * *',
+    endpoint: '/api/cron/aggregate',
+    syncType: 'aggregate',
+  },
+  {
+    id: 'send-daily-snapshot',
+    name: 'Daily Snapshot',
+    description: 'Send daily email snapshot to subscribers',
+    schedule: 'Daily at 8:00 AM',
+    cronExpression: '0 8 * * *',
+    endpoint: '/api/cron/send-daily-snapshot',
+    syncType: 'daily_snapshot',
   },
 ]
 
