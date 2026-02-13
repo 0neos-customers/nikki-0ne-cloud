@@ -39,38 +39,42 @@ export async function GET(request: NextRequest) {
   const specificUserId = searchParams.get('user_id')
 
   const startTime = Date.now()
-  console.log('[hand-raiser-check] Starting hand-raiser processing')
 
+  // Check for active campaigns BEFORE starting sync log
+  // This prevents creating log entries when there's nothing to process
+  const users = await getUsersWithActiveHandRaisers()
+
+  if (users.length === 0) {
+    console.log('[hand-raiser-check] No active campaigns - skipping')
+    return NextResponse.json({
+      success: true,
+      message: 'No active hand-raiser campaigns',
+      skipped: true,
+      duration: `${((Date.now() - startTime) / 1000).toFixed(1)}s`,
+    })
+  }
+
+  // Filter to specific user if requested
+  const targetUsers = specificUserId
+    ? users.filter((u) => u.user_id === specificUserId)
+    : users
+
+  if (targetUsers.length === 0) {
+    console.log('[hand-raiser-check] No matching users - skipping')
+    return NextResponse.json({
+      success: true,
+      message: 'No matching users',
+      skipped: true,
+      duration: `${((Date.now() - startTime) / 1000).toFixed(1)}s`,
+    })
+  }
+
+  // Only start sync log when we actually have work to do
+  console.log('[hand-raiser-check] Starting hand-raiser processing')
   const syncLogger = new SyncLogger('hand_raiser')
   await syncLogger.start({ source: 'cron' })
 
   try {
-    // Get users with active hand-raiser campaigns
-    const users = await getUsersWithActiveHandRaisers()
-
-    if (users.length === 0) {
-      console.log('[hand-raiser-check] No users with active campaigns')
-      await syncLogger.complete(0, { message: 'No active hand-raiser campaigns' })
-      return NextResponse.json({
-        success: true,
-        message: 'No active hand-raiser campaigns',
-        duration: `${((Date.now() - startTime) / 1000).toFixed(1)}s`,
-      })
-    }
-
-    // Filter to specific user if requested
-    const targetUsers = specificUserId
-      ? users.filter((u) => u.user_id === specificUserId)
-      : users
-
-    if (targetUsers.length === 0) {
-      await syncLogger.complete(0, { message: 'No matching users' })
-      return NextResponse.json({
-        success: true,
-        message: 'No matching users',
-        duration: `${((Date.now() - startTime) / 1000).toFixed(1)}s`,
-      })
-    }
 
     console.log(`[hand-raiser-check] Processing ${targetUsers.length} users`)
 
