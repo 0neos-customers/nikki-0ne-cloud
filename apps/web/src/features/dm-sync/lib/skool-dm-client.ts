@@ -165,6 +165,7 @@ export class SkoolDmClient {
     const fullUrl = url.startsWith('http') ? url : `${SKOOL_API_BASE}${url}`
 
     console.log(`[SkoolDmClient] ${options.method || 'GET'} ${fullUrl}`)
+    console.log(`[SkoolDmClient] Cookie length: ${this.cookies?.length || 0}, has auth_token: ${this.cookies?.includes('auth_token=') || false}`)
 
     try {
       const response = await fetch(fullUrl, {
