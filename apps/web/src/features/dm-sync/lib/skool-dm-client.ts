@@ -283,6 +283,42 @@ export class SkoolDmClient {
   }
 
   /**
+   * Extract user_id from auth_token JWT in cookies
+   *
+   * The Skool auth_token is a JWT that contains the user_id in its payload.
+   * Format: auth_token=eyJ...header...eyJ...payload...signature
+   */
+  private extractUserIdFromAuthToken(): string | null {
+    try {
+      // Find auth_token in cookies
+      const authTokenMatch = this.cookies.match(/auth_token=([^;]+)/)
+      if (!authTokenMatch) {
+        return null
+      }
+
+      const jwt = authTokenMatch[1]
+      const parts = jwt.split('.')
+      if (parts.length !== 3) {
+        return null
+      }
+
+      // Decode the payload (second part)
+      const payload = JSON.parse(
+        Buffer.from(parts[1], 'base64').toString('utf-8')
+      )
+
+      if (payload.user_id && typeof payload.user_id === 'string') {
+        return payload.user_id
+      }
+
+      return null
+    } catch (error) {
+      console.log('[SkoolDmClient] Failed to extract user_id from auth_token:', error)
+      return null
+    }
+  }
+
+  /**
    * Transform API chat channel to SkoolConversation
    */
   private transformChannel(channel: SkoolApiChatChannel): SkoolConversation {
@@ -313,13 +349,18 @@ export class SkoolDmClient {
     message: SkoolApiMessage,
     currentUserId: string
   ): SkoolMessage {
+    const isOutbound = message.metadata.src === currentUserId
+
+    // Debug logging to diagnose outbound detection
+    console.log(`[SkoolDmClient] transformMessage: id=${message.id}, src=${message.metadata.src}, currentUserId=${currentUserId}, isOutbound=${isOutbound}, content="${(message.metadata.content || '').substring(0, 50)}..."`)
+
     return {
       id: message.id,
       conversationId: message.channel_id,
       senderId: message.metadata.src,
       content: message.metadata.content,
       sentAt: new Date(message.created_at),
-      isOutbound: message.metadata.src === currentUserId,
+      isOutbound,
     }
   }
 
@@ -531,30 +572,98 @@ export class SkoolDmClient {
   /**
    * Get the current authenticated user's ID
    *
-   * Extracts from the first conversation's context or makes a profile call.
+   * Uses multiple strategies:
+   * 1. Check SKOOL_USER_ID environment variable
+   * 2. Try /self/user endpoint (unreliable - often returns 404)
+   * 3. Infer from conversation context (the message sender who ISN'T the conversation participant)
    */
   async getCurrentUserId(): Promise<string> {
     if (this.currentUserId) {
+      console.log(`[SkoolDmClient] Returning cached current user ID: ${this.currentUserId}`)
       return this.currentUserId
     }
 
-    // Get user ID from self endpoint
+    // Strategy 1: Check environment variable (most reliable)
+    const envUserId = process.env.SKOOL_USER_ID
+    if (envUserId) {
+      console.log(`[SkoolDmClient] Using SKOOL_USER_ID from environment: ${envUserId}`)
+      this.currentUserId = envUserId
+      return this.currentUserId
+    }
+
+    // Strategy 2: Extract from auth_token JWT in cookies
+    const jwtUserId = this.extractUserIdFromAuthToken()
+    if (jwtUserId) {
+      console.log(`[SkoolDmClient] Extracted user ID from auth_token JWT: ${jwtUserId}`)
+      this.currentUserId = jwtUserId
+      return this.currentUserId
+    }
+
+    // Strategy 3: Try /self/user endpoint (often fails with 404)
     try {
+      console.log(`[SkoolDmClient] Trying /self/user endpoint...`)
       const response = await this.fetch<{ user: { id: string } }>(
         '/self/user'
       )
-      this.currentUserId = response.user?.id || ''
-      console.log(`[SkoolDmClient] Current user ID: ${this.currentUserId}`)
-      return this.currentUserId
-    } catch {
-      // Fallback to a known constant if self endpoint fails
-      // This will need to be updated for different users
-      console.warn(
-        '[SkoolDmClient] Could not fetch current user ID, using fallback'
+      if (response.user?.id) {
+        this.currentUserId = response.user.id
+        console.log(`[SkoolDmClient] Got user ID from /self/user: ${this.currentUserId}`)
+        return this.currentUserId
+      }
+    } catch (error) {
+      console.log(
+        '[SkoolDmClient] /self/user endpoint failed (expected):',
+        error instanceof Error ? error.message : error
       )
-      this.currentUserId = ''
-      return this.currentUserId
     }
+
+    // Strategy 4: Infer from conversations
+    // In a DM, any message where sender !== participant must be from the current user
+    console.log(`[SkoolDmClient] Attempting to infer user ID from conversations...`)
+    try {
+      const conversations = await this.getInbox(0, 5)
+      for (const conv of conversations) {
+        const messages = await this.getMessagesRaw(conv.channelId, '1')
+        for (const msg of messages) {
+          // If sender is NOT the conversation participant, sender must be current user
+          if (msg.metadata.src !== conv.participant.id) {
+            this.currentUserId = msg.metadata.src
+            console.log(`[SkoolDmClient] Inferred user ID from outbound message: ${this.currentUserId}`)
+            return this.currentUserId
+          }
+          // Alternative: if dst is NOT the participant, dst must be current user
+          if (msg.metadata.dst !== conv.participant.id) {
+            this.currentUserId = msg.metadata.dst
+            console.log(`[SkoolDmClient] Inferred user ID from inbound message dst: ${this.currentUserId}`)
+            return this.currentUserId
+          }
+        }
+      }
+    } catch (error) {
+      console.error('[SkoolDmClient] Failed to infer user ID from conversations:', error)
+    }
+
+    console.error('[SkoolDmClient] CRITICAL: Could not determine current user ID!')
+    console.error('[SkoolDmClient] Set SKOOL_USER_ID environment variable to fix outbound detection.')
+    this.currentUserId = ''
+    return this.currentUserId
+  }
+
+  /**
+   * Get raw messages without transformation (for user ID inference)
+   */
+  private async getMessagesRaw(
+    channelId: string,
+    afterMessageId = '1'
+  ): Promise<SkoolApiMessage[]> {
+    const url = new URL(`${SKOOL_API_BASE}/channels/${channelId}/messages`)
+    url.searchParams.set('after', afterMessageId)
+
+    const response = await this.fetch<{ messages: SkoolApiMessage[] }>(
+      url.toString()
+    )
+
+    return response.messages || []
   }
 
   /**
