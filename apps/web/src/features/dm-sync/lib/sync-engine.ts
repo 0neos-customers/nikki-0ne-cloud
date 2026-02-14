@@ -253,12 +253,20 @@ async function processConversation(
         ghlContactId = contactResult.ghlContactId
       }
 
+      // Skip messages with no content
+      const messageContent = message.content || ''
+      if (!messageContent.trim()) {
+        console.log(`[Sync Engine] Skipping empty message ${message.id}`)
+        result.skipped++
+        continue
+      }
+
       // Push message to GHL
       const ghlMessageId = await ghlClient.pushInboundMessage(
         ghlLocationId,
         ghlContactId,
         conversation.participant.id,
-        message.content,
+        messageContent,
         message.id // Use Skool message ID as altId for deduplication
       )
 
@@ -270,7 +278,7 @@ async function processConversation(
         ghl_message_id: ghlMessageId,
         skool_user_id: message.senderId,
         direction: 'inbound',
-        message_text: message.content,
+        message_text: messageContent,
         status: 'synced',
         created_at: message.sentAt.toISOString(),
         synced_at: new Date().toISOString(),

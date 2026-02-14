@@ -301,7 +301,7 @@ export class GhlConversationProviderClient {
     console.log('[GHL Provider] Pushing inbound message:', {
       contactId,
       skoolUserId,
-      messageLength: messageText.length,
+      messageLength: messageText?.length || 0,
       altId: skoolMessageId,
     })
 
