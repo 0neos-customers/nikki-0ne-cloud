@@ -171,10 +171,13 @@ export class SkoolDmClient {
         ...options,
         headers: {
           accept: 'application/json',
+          'accept-language': 'en-US,en;q=0.9',
           'content-type': 'application/json',
           cookie: this.cookies,
           origin: 'https://www.skool.com',
           referer: 'https://www.skool.com/',
+          'user-agent':
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
           ...options.headers,
         },
       })
