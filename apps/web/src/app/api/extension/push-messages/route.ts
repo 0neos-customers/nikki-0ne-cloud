@@ -3,6 +3,21 @@ import { createServerClient } from '@0ne/db/server'
 
 export const dynamic = 'force-dynamic'
 
+// CORS headers for Chrome extension
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+}
+
+/**
+ * OPTIONS /api/extension/push-messages
+ * Handle CORS preflight
+ */
+export async function OPTIONS() {
+  return new NextResponse(null, { status: 200, headers: corsHeaders })
+}
+
 /**
  * Chrome Extension Push Messages API
  *
@@ -54,11 +69,17 @@ function validateExtensionApiKey(request: NextRequest): NextResponse | null {
 
   if (!expectedKey) {
     console.error('[Extension API] EXTENSION_API_KEY environment variable not set')
-    return NextResponse.json({ error: 'Server configuration error' }, { status: 500 })
+    return NextResponse.json(
+      { error: 'Server configuration error' },
+      { status: 500, headers: corsHeaders }
+    )
   }
 
   if (!authHeader) {
-    return NextResponse.json({ error: 'Missing Authorization header' }, { status: 401 })
+    return NextResponse.json(
+      { error: 'Missing Authorization header' },
+      { status: 401, headers: corsHeaders }
+    )
   }
 
   // Extract Bearer token
@@ -66,13 +87,16 @@ function validateExtensionApiKey(request: NextRequest): NextResponse | null {
   if (!match) {
     return NextResponse.json(
       { error: 'Invalid Authorization header format. Expected: Bearer {apiKey}' },
-      { status: 401 }
+      { status: 401, headers: corsHeaders }
     )
   }
 
   const apiKey = match[1]
   if (apiKey !== expectedKey) {
-    return NextResponse.json({ error: 'Invalid API key' }, { status: 401 })
+    return NextResponse.json(
+      { error: 'Invalid API key' },
+      { status: 401, headers: corsHeaders }
+    )
   }
 
   return null // Valid
@@ -93,7 +117,7 @@ export async function POST(request: NextRequest) {
     // Validate request structure
     const validationError = validateRequest(body)
     if (validationError) {
-      return NextResponse.json({ error: validationError }, { status: 400 })
+      return NextResponse.json({ error: validationError }, { status: 400, headers: corsHeaders })
     }
 
     const { staffSkoolId, conversationId, messages } = body
@@ -175,7 +199,7 @@ export async function POST(request: NextRequest) {
       ...(errors.length > 0 && { errors }),
     }
 
-    return NextResponse.json(response)
+    return NextResponse.json(response, { headers: corsHeaders })
   } catch (error) {
     console.error('[Extension API] POST exception:', error)
     return NextResponse.json(
@@ -185,7 +209,7 @@ export async function POST(request: NextRequest) {
         skipped: 0,
         errors: [error instanceof Error ? error.message : 'Unknown error'],
       } as PushMessagesResponse,
-      { status: 500 }
+      { status: 500, headers: corsHeaders }
     )
   }
 }
