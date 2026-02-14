@@ -244,9 +244,10 @@ function validateRequest(body: PushMessagesRequest): string | null {
     if (!msg.senderId?.trim()) {
       return `Message at index ${i}: missing required field "senderId"`
     }
-    if (!msg.senderName?.trim()) {
-      return `Message at index ${i}: missing required field "senderName"`
-    }
+    // senderName is optional - we can lookup by senderId
+    // if (!msg.senderName?.trim()) {
+    //   return `Message at index ${i}: missing required field "senderName"`
+    // }
     if (typeof msg.content !== 'string') {
       return `Message at index ${i}: missing required field "content"`
     }
