@@ -114,20 +114,38 @@ export async function POST(request: Request) {
     }
 
     // 4. Validate required fields
-    const { contactId, body, conversationId, locationId, messageId } = payload
+    // GHL may send message content in different fields depending on conversation type
+    const rawPayload = payload as unknown as Record<string, unknown>
+    const { contactId, conversationId, locationId, messageId } = payload
 
-    if (!contactId || !body || !conversationId || !locationId) {
+    // Try multiple field names for message content
+    const messageText = (
+      rawPayload.body ||
+      rawPayload.message ||
+      rawPayload.text ||
+      rawPayload.content ||
+      rawPayload.messageBody
+    ) as string | undefined
+
+    console.log('[GHL Webhook] Payload fields:', Object.keys(rawPayload))
+    console.log('[GHL Webhook] Full payload:', JSON.stringify(rawPayload).slice(0, 500))
+
+    if (!contactId || !messageText || !conversationId || !locationId) {
       console.error('[GHL Webhook] Missing required fields:', {
         hasContactId: !!contactId,
-        hasBody: !!body,
+        hasMessageText: !!messageText,
         hasConversationId: !!conversationId,
         hasLocationId: !!locationId,
+        availableFields: Object.keys(rawPayload),
       })
       return NextResponse.json(
-        { error: 'Missing required fields' },
+        { error: 'Missing required fields', availableFields: Object.keys(rawPayload) },
         { status: 400 }
       )
     }
+
+    // Use messageText instead of body from here on
+    const body = messageText
 
     console.log('[GHL Webhook] Processing outbound message:', {
       contactId,
