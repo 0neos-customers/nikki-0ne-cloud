@@ -17,10 +17,6 @@
       "schedule": "0 4 * * *"
     },
     {
-      "path": "/api/cron/sync-skool",
-      "schedule": "0 5 * * *"
-    },
-    {
       "path": "/api/cron/sync-meta",
       "schedule": "0 6 * * *"
     },

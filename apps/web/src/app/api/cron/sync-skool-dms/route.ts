@@ -1,7 +1,8 @@
 /**
  * Sync Skool DMs Cron Endpoint
  *
- * Syncs inbound Skool DMs to GHL inbox.
+ * Processes extension-captured Skool DMs → GHL inbox.
+ * Server-side Skool API calls removed (AWS WAF blocks them).
  * Runs every 5 minutes via Vercel Cron.
  *
  * Manual invocation:
@@ -10,26 +11,22 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import {
-  syncInboundMessages,
   syncExtensionMessages,
   getEnabledSyncConfigs,
   type InboundSyncResult,
 } from '@/features/dm-sync'
 import { SyncLogger } from '@/lib/sync-log'
-import { hasSkoolCookies } from '@/lib/skool-cookie-resolver'
 
 export const maxDuration = 300 // 5 minutes max for sync
 
 /**
  * GET /api/cron/sync-skool-dms
  *
- * Syncs inbound Skool DMs to GHL inbox for all enabled users.
+ * Processes extension-captured messages to GHL for all enabled users.
+ * (Server-side Skool API sync removed - AWS WAF blocks all server→Skool calls)
  *
  * Query params:
  * - user_id: Optional - sync only for specific user
- * - backfill: Optional - enable full history backfill mode (true/false)
- * - max_messages: Optional - max messages per conversation in backfill mode (default: 200)
- * - skool_user_id: Optional - sync only for specific Skool user (by their Skool ID)
  */
 export async function GET(request: NextRequest) {
   // Verify cron secret (allow localhost bypass for development)
@@ -42,14 +39,10 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  const { searchParams } = new URL(request.url)
-  const specificUserId = searchParams.get('user_id')
-  const backfillMode = searchParams.get('backfill') === 'true'
-  const maxMessages = parseInt(searchParams.get('max_messages') || '200', 10)
-  const filterSkoolUserId = searchParams.get('skool_user_id')
+  const specificUserId = new URL(request.url).searchParams.get('user_id')
 
   const startTime = Date.now()
-  console.log('[sync-skool-dms] Starting inbound sync')
+  console.log('[sync-skool-dms] Starting extension message sync to GHL')
 
   const syncLogger = new SyncLogger('skool_dms')
   await syncLogger.start({ source: 'cron' })
@@ -103,46 +96,8 @@ export async function GET(request: NextRequest) {
       })
     }
 
-    // Server-side Skool API sync (per-user cookie resolution: DB first, then env var)
-    for (const config of targetConfigs) {
-      const userHasCookies = await hasSkoolCookies(config.user_id)
-      if (!userHasCookies) {
-        console.log(`[sync-skool-dms] No cookies available for ${config.user_id}, skipping server-side sync`)
-        continue
-      }
-
-      try {
-        console.log(`[sync-skool-dms] Syncing user: ${config.user_id}${backfillMode ? ' (BACKFILL MODE)' : ''}`)
-        const result = await syncInboundMessages(config.user_id, {
-          backfill: backfillMode,
-          maxMessagesPerConversation: maxMessages,
-          filterUserId: filterSkoolUserId || undefined,
-        })
-        const userResult = results.find((r) => r.userId === config.user_id)
-        if (userResult) {
-          userResult.result.synced += result.synced
-          userResult.result.skipped += result.skipped
-          userResult.result.errors += result.errors
-          userResult.result.errorDetails.push(...result.errorDetails)
-        }
-      } catch (error) {
-        console.error(
-          `[sync-skool-dms] Error syncing user ${config.user_id}:`,
-          error instanceof Error ? error.message : error
-        )
-        const userResult = results.find((r) => r.userId === config.user_id)
-        if (userResult) {
-          userResult.result.errors++
-          userResult.result.errorDetails.push({
-            error: error instanceof Error ? error.message : String(error),
-          })
-        }
-      }
-    }
-
     // Extension message sync - processes messages captured by Chrome extension
     // This doesn't call Skool API - just pushes already-captured messages to GHL
-    console.log('[sync-skool-dms] Running extension message sync to GHL')
     for (const config of targetConfigs) {
       try {
         const extResult = await syncExtensionMessages(config.user_id)
@@ -189,7 +144,6 @@ export async function GET(request: NextRequest) {
         skipped: r.result.skipped,
         errors: r.result.errors,
         errorDetails: r.result.errorDetails,
-        debugInfo: bypassAuth ? r.result.debugInfo : undefined,
       })),
     })
   } catch (error) {

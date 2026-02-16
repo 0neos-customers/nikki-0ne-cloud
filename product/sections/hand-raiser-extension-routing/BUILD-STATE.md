@@ -34,7 +34,7 @@ Hand-raiser detected -> Tag GHL contact (if ghl_tag set)
 
 | Phase | Description | Status |
 |-------|-------------|--------|
-| 1 | Database Migration | Code Ready - Run Migration |
+| 1 | Database Migration | DONE |
 | 2 | API: get-pending Query Update | DONE |
 | 3 | Sync Engine: Set Source Field | DONE |
 | 4 | Cron: Exclude Hand-Raisers | DONE |

@@ -27,8 +27,8 @@
 | Skool-GHL DM Sync | ✅ Working | `sections/skool-sync/BUILD-STATE.md` |
 | Skool Inbox | ✅ Complete | `sections/skool-inbox/BUILD-STATE.md` |
 | Hand-Raiser Extension Routing | 🔄 Deploy | `sections/hand-raiser-extension-routing/BUILD-STATE.md` |
-| Skool Chrome Extension | 🔄 Planning | `sections/skool-extension/BUILD-STATE.md` |
-| Hand-Raiser UI | ✅ Complete | `sections/hand-raiser-ui/BUILD-STATE.md` |
+| Skool Chrome Extension | ✅ Complete | `sections/skool-extension/BUILD-STATE.md` |
+| Hand-Raiser UI | ⬜ Planned | `sections/hand-raiser-ui/BUILD-STATE.md` |
 | Cron Fix + Sync Dashboard | ✅ Complete | `sections/sync-dashboard/BUILD-STATE.md` |
 | Skool Scheduler | ✅ Complete | `sections/skool-scheduler/BUILD-STATE.md` |
 | GHL Media Manager | ✅ Complete | `sections/media/BUILD-STATE.md` |
@@ -42,24 +42,6 @@
 ---
 
 ## Next Actions
-
-### Skool Chrome Extension (PRIORITY)
-**Chrome Extension for cookie management and full DM history sync**
-
-**Why needed:**
-- Skool DM API only returns ~1 message per conversation (discovered 2026-02-14)
-- Cannot backfill full message history via server-side API
-- Cookies expire frequently (AWS session cookies)
-
-**Features to plan:**
-1. Cookie extraction and auto-refresh to 0ne-app
-2. DOM scraping for full DM conversation history
-3. WebSocket interception for real-time message capture
-4. Push messages to 0ne-app sync API
-
-**To start:** Create `sections/skool-extension/BUILD-STATE.md` with planning doc
-
----
 
 ### Hand-Raiser Campaign UI (Queued)
 **Build UI to manage Hand-Raiser campaigns (auto-DM Skool commenters)**
@@ -79,15 +61,32 @@
    AND created_at < NOW() - INTERVAL '24 hours';
    ```
 
-2. **Fix Vercel env var** - Remove trailing newline from `GHL_CONVERSATION_PROVIDER_ID`
-
-3. **Optional: Reduce webhook logging** - Currently verbose for debugging, can trim later
+2. **Optional: Reduce webhook logging** - Currently verbose for debugging, can trim later
 
 ---
 
 ## Blockers / Decisions Needed
 
 None currently.
+
+---
+
+## Architecture Note: Extension-First Skool Integration (2026-02-16)
+
+AWS WAF blocks all server-side Skool API calls. The Chrome extension is the **sole data collector** for Skool.
+
+**Killed crons:**
+- `sync-skool` (daily member/KPI fetch) - removed from vercel.json
+- `syncInboundMessages` in `sync-skool-dms` - removed (server-side Skool fetch)
+
+**Active crons (non-Skool or processing only):**
+- `sync-ghl` - GHL data sync (daily)
+- `sync-meta` - Meta ads sync (daily)
+- `aggregate` - Data aggregation (daily)
+- `send-daily-snapshot` - Notifications (daily)
+- `sync-skool-dms` - Extension message processing → GHL only (every 5min)
+- `send-pending-dms` - Outbound DM queue (every 5min)
+- `hand-raiser-check` - Comment analysis (every 15min)
 
 ---
 
@@ -99,9 +98,6 @@ cd apps/web && bun dev
 
 # Run GHL sync
 curl -H "Authorization: Bearer $CRON_SECRET" "http://localhost:3000/api/cron/sync-ghl"
-
-# Run Skool member sync
-curl -H "Authorization: Bearer $CRON_SECRET" "http://localhost:3000/api/cron/sync-skool"
 
 # Run Meta ads sync
 curl -H "Authorization: Bearer $CRON_SECRET" "http://localhost:3000/api/cron/sync-meta"
@@ -123,3 +119,4 @@ See `COMPLETED-FEATURES.md` for full archive. Summary:
 - ✅ Expenses System Upgrade
 - ✅ Skool Revenue & MRR Integration
 - ✅ Skool-GHL DM Sync (bidirectional - Skool↔GHL↔0ne Inbox all working as of 2026-02-16)
+- ✅ Skool Chrome Extension (12 phases: API intercept, WebSocket, DM send, multi-staff, cookies, auth, members/KPI/analytics, scheduler, polling, backfill)

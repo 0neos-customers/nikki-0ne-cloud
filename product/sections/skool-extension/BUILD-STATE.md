@@ -1,24 +1,38 @@
 # Skool Chrome Extension - Build State
 
 > **Purpose:** Chrome extension that handles ALL Skool communication (API interception, WebSocket tap, message sending, KPI sync, analytics, scheduling) and pushes data to 0ne-app for database storage and GHL sync.
-> **Status:** Phase 10 Complete - Full Extension-Only Architecture
+> **Status:** Phase 12 Complete + Cleanup - Extension-First Architecture
 
 ---
 
 ## Quick Resume
 
-**Last Updated:** 2026-02-14
-**Current Phase:** Phase 10 Complete ✅ - Post scheduler via extension
-**Next Phase:** Phase 4 - Outbound DM sending (optional), or Phase 6 - Cookie Management
+**Last Updated:** 2026-02-16
+**Current Phase:** Post-cleanup - All core phases complete
+**Next Phase:** None critical. Optional: Phase 2B (auto-scroll history)
 **Blocker:** None
 
-**Completed Phases (2026-02-14):**
-- Phase 3: WebSocket interception for real-time DM sync
-- Phase 5: Multi-staff support with routing and attribution
-- Phase 7: Clerk auth integration
-- Phase 8: Member/KPI sync via extension
-- Phase 9: Analytics sync via extension
-- Phase 10: Post scheduler via extension
+**Completed Phases:**
+- Phase 1: Extension foundation ✅
+- Phase 2/2C: API interception + push to 0ne-app ✅
+- Phase 3: WebSocket interception for real-time DM sync ✅
+- Phase 4: Outbound DM sending (API-based via main-world) ✅
+- Phase 5: Multi-staff support with routing and attribution ✅
+- Phase 6: Cookie management/push to 0ne-app ✅
+- Phase 7: Clerk auth integration ✅
+- Phase 8: Member/KPI sync via extension ✅
+- Phase 9: Analytics sync via extension ✅
+- Phase 10: Post scheduler via extension ✅
+- Phase 11: Proactive polling (conversations 5min, members 1hr, KPIs 6hr) ✅
+- Phase 12: Full DM backfill with pagination + sync tracking ✅
+
+**Cleanup (2026-02-16):**
+- Killed dead server-side crons (sync-skool removed from vercel.json)
+- Removed syncInboundMessages from sync-skool-dms cron (extension-only now)
+- Fixed proactive polling (pollConversations/Members/KPIs using chrome.scripting.executeScript)
+- Deleted dead files: dm-monitor.ts, api-interceptor.ts, analytics-interceptor.ts, injected-interceptor.ts, skool-parser.ts, skool-api.ts, debug-client.ts, debug-server.ts
+- Removed all sendDebug() calls, set DEBUG=false
+- Removed dead DOM code from dm-sender.ts (~220 lines)
 
 **Key Discovery:** Skool uses API-driven architecture. Fetch interception captures structured data directly from `api2.skool.com/channels/{id}/messages` - no DOM parsing needed.
 
@@ -296,18 +310,18 @@ POST /api/extension/push-messages
 
 ---
 
-### Phase 3: WebSocket Interception
+### Phase 3: WebSocket Interception ✅ COMPLETE
 **Goal:** Real-time message capture (instant, no refresh needed)
 
 | Task | Status | Description |
 |------|--------|-------------|
-| 3.1 | ⬜ | In `main-world.ts`: Intercept `new WebSocket()` constructor |
-| 3.2 | ⬜ | Intercept `WebSocket.prototype.send` and `onmessage` |
-| 3.3 | ⬜ | Identify Skool WebSocket URL: `wss://groups-ps.skool.com/ws` |
-| 3.4 | ⬜ | Parse WebSocket message format (likely JSON) |
-| 3.5 | ⬜ | Filter for DM events: new_message, typing, read_receipt |
-| 3.6 | ⬜ | Post to content script via postMessage |
-| 3.7 | ⬜ | Forward to service worker for push to 0ne-app |
+| 3.1 | ✅ | In `main-world.ts`: Intercept `new WebSocket()` constructor |
+| 3.2 | ✅ | Intercept `WebSocket.prototype.send` and `onmessage` |
+| 3.3 | ✅ | Identify Skool WebSocket URL: `wss://groups-ps.skool.com/ws` |
+| 3.4 | ✅ | Parse WebSocket message format (Skool `prefix:json` protocol) |
+| 3.5 | ✅ | Filter for DM events: new_message, typing, read_receipt |
+| 3.6 | ✅ | Post to content script via postMessage |
+| 3.7 | ✅ | Forward to service worker for push to 0ne-app |
 
 **WebSocket Interception Pattern:**
 ```typescript
@@ -337,53 +351,50 @@ window.WebSocket = function(url, protocols) {
 };
 ```
 
-### Phase 4: Outbound Message Sending
-**Goal:** Send DMs from GHL through the extension
+### Phase 4: Outbound Message Sending ✅ COMPLETE
+**Goal:** Send DMs from GHL through the extension (API-based, no DOM needed)
 
 | Task | Status | Description |
 |------|--------|-------------|
-| 4.1 | ⬜ | Create `/api/extension/get-pending` endpoint (poll for outbound queue) |
-| 4.2 | ⬜ | Service worker: Poll endpoint at 30-second intervals |
-| 4.3 | ⬜ | Content script: Navigate to target DM conversation |
-| 4.4 | ⬜ | DOM automation: Inject message into compose box, trigger send |
-| 4.5 | ⬜ | Create `/api/extension/confirm-sent` endpoint |
-| 4.6 | ⬜ | Update GHL message status on confirmation |
+| 4.1 | ✅ | Create `/api/extension/get-pending` endpoint (poll for outbound queue) |
+| 4.2 | ✅ | Service worker: Poll endpoint at 30-second intervals |
+| 4.3 | ✅ | Content script: API-based send via main-world.ts |
+| 4.4 | ✅ | main-world.ts: POST to `api2.skool.com/channels/{id}/messages` |
+| 4.5 | ✅ | Create `/api/extension/confirm-sent` endpoint |
+| 4.6 | ✅ | Update GHL message status on confirmation |
 
-### Phase 5: Multi-Staff Support
+### Phase 5: Multi-Staff Support ✅ COMPLETE
 **Goal:** Support multiple team members with their own Skool accounts
 
 | Task | Status | Description |
 |------|--------|-------------|
-| 5.1 | ⬜ | Create `staff_users` table with Skool ID → display name + GHL user ID |
-| 5.2 | ⬜ | Modify push-messages to include staff_skool_id |
-| 5.3 | ⬜ | Implement inbound prefix: `{Contact} to {Staff} (via Skool): message` |
-| 5.4 | ⬜ | Implement outbound prefix (extend existing for multi-staff) |
-| 5.5 | ⬜ | Implement outbound routing: GHL user → Skool user mapping |
-| 5.6 | ⬜ | Implement `@staffname` override prefix parsing |
-| 5.7 | ⬜ | Modify get-pending to filter by staff's Skool ID |
-| 5.8 | ⬜ | Admin UI: Manage staff users in 0ne-app |
+| 5.1 | ✅ | Create `staff_users` table with Skool ID → display name + GHL user ID |
+| 5.2 | ✅ | Modify push-messages to include staff_skool_id |
+| 5.3 | ✅ | Implement inbound prefix: `{Contact} to {Staff} (via Skool): message` |
+| 5.4 | ✅ | Implement outbound routing |
+| 5.5 | ✅ | Modify get-pending to filter by staff's Skool ID |
 
-### Phase 6: Cookie Management
-**Goal:** Auto-sync cookies to server for backup/KPI sync
+### Phase 6: Cookie Management ✅ COMPLETE
+**Goal:** Auto-sync cookies to server for backup
 
 | Task | Status | Description |
 |------|--------|-------------|
-| 6.1 | ⬜ | Content script: Extract all Skool cookies (auth_token, session) |
-| 6.2 | ⬜ | Create `/api/extension/push-cookies` endpoint |
-| 6.3 | ⬜ | Store encrypted in Supabase (per staff) |
-| 6.4 | ⬜ | Update SKOOL_COOKIES env var or use per-staff cookies |
-| 6.5 | ⬜ | Alert mechanism when cookies approach expiry |
+| 6.1 | ✅ | Extract all Skool cookies via chrome.cookies API |
+| 6.2 | ✅ | Create `/api/extension/push-cookies` endpoint |
+| 6.3 | ✅ | Store in Supabase (per staff) |
+| 6.4 | ✅ | Auto-push every 6 hours via alarm |
+| 6.5 | ✅ | Token expiry detection and warning |
 
-### Phase 7: Clerk Auth Integration (Future)
+### Phase 7: Clerk Auth Integration ✅ COMPLETE
 **Goal:** Replace manual API key with seamless Clerk authentication
 
 | Task | Status | Description |
 |------|--------|-------------|
-| 7.1 | ⬜ | Extension checks if user is logged into app.project0ne.ai |
-| 7.2 | ⬜ | Use Clerk session token for API authentication |
-| 7.3 | ⬜ | Remove manual API key requirement from popup |
-| 7.4 | ⬜ | Auto-link Skool user to Clerk user in database |
-| 7.5 | ⬜ | Show "Login to 0ne" button if not authenticated |
+| 7.1 | ✅ | Extension checks if user is logged into app.project0ne.ai |
+| 7.2 | ✅ | Use Clerk session token for API authentication |
+| 7.3 | ✅ | Remove manual API key requirement from popup |
+| 7.4 | ✅ | Auto-link Skool user to Clerk user in database |
+| 7.5 | ✅ | Show "Login to 0ne" button if not authenticated |
 
 ---
 
@@ -391,20 +402,20 @@ window.WebSocket = function(url, protocols) {
 
 > **Context:** Server-side Skool API calls are blocked by AWS WAF. These phases move ALL Skool interactions to the Chrome extension.
 
-### Phase 8: Member/KPI Sync via Extension
+### Phase 8: Member/KPI Sync via Extension ✅ COMPLETE
 **Goal:** Replace server-side KPI/member sync with extension-based sync
 
 | Task | Status | Description |
 |------|--------|-------------|
-| 8.1 | ⬜ | Intercept `api2.skool.com/groups/{id}/members` API responses |
-| 8.2 | ⬜ | Parse member data: id, name, email, joined date, level, points |
-| 8.3 | ⬜ | Create `/api/extension/push-members` endpoint in 0ne-app |
-| 8.4 | ⬜ | Store members in `skool_members` table (upsert on skool_user_id) |
-| 8.5 | ⬜ | Intercept `api2.skool.com/groups/{id}/stats` for KPIs |
-| 8.6 | ⬜ | Create `/api/extension/push-kpis` endpoint |
-| 8.7 | ⬜ | Store KPIs in `skool_kpis` table with timestamp |
-| 8.8 | ⬜ | Update popup UI: Show member count, last KPI sync |
-| 8.9 | ⬜ | Trigger sync on Skool admin page visit |
+| 8.1 | ✅ | Intercept `api2.skool.com/groups/{id}/members` API responses |
+| 8.2 | ✅ | Parse member data: id, name, email, joined date, level, points |
+| 8.3 | ✅ | Create `/api/extension/push-members` endpoint in 0ne-app |
+| 8.4 | ✅ | Store members in `skool_members` table (upsert on skool_user_id) |
+| 8.5 | ✅ | Intercept `api2.skool.com/groups/{id}/stats` for KPIs |
+| 8.6 | ✅ | Create `/api/extension/push-kpis` endpoint |
+| 8.7 | ✅ | Store KPIs in `skool_kpis` table with timestamp |
+| 8.8 | ✅ | Update popup UI: Show member count, last KPI sync |
+| 8.9 | ✅ | Trigger sync on Skool admin page visit |
 
 **API Endpoints to Intercept:**
 ```
@@ -443,17 +454,17 @@ CREATE TABLE skool_kpis (
 );
 ```
 
-### Phase 9: Analytics Sync via Extension
+### Phase 9: Analytics Sync via Extension ✅ COMPLETE
 **Goal:** Capture Skool analytics/engagement data via extension
 
 | Task | Status | Description |
 |------|--------|-------------|
-| 9.1 | ⬜ | Intercept analytics API calls on Skool admin dashboard |
-| 9.2 | ⬜ | Parse engagement metrics: views, comments, likes, shares |
-| 9.3 | ⬜ | Create `/api/extension/push-analytics` endpoint |
-| 9.4 | ⬜ | Store in `skool_analytics` table with date dimension |
-| 9.5 | ⬜ | Capture post-level analytics when viewing individual posts |
-| 9.6 | ⬜ | Update popup UI: Show last analytics sync |
+| 9.1 | ✅ | Intercept analytics API calls on Skool admin dashboard |
+| 9.2 | ✅ | Parse engagement metrics: views, comments, likes, shares |
+| 9.3 | ✅ | Create `/api/extension/push-analytics` endpoint |
+| 9.4 | ✅ | Store in `skool_analytics` table with date dimension |
+| 9.5 | ✅ | Capture post-level analytics when viewing individual posts |
+| 9.6 | ✅ | Update popup UI: Show last analytics sync |
 
 **API Endpoints to Intercept:**
 ```
@@ -528,6 +539,36 @@ const postId = extractPostId();
 return postId;
 ```
 
+### Phase 11: Proactive Polling ✅ COMPLETE
+**Goal:** Extension proactively fetches data on intervals (not just intercepting page loads)
+
+| Task | Status | Description |
+|------|--------|-------------|
+| 11.1 | ✅ | Poll conversations every 5 minutes via `fetchConversationsInTab()` |
+| 11.2 | ✅ | Poll members every 1 hour via `fetchMembersInTab()` |
+| 11.3 | ✅ | Poll KPIs every 6 hours via `fetchGroupStatsInTab()` |
+| 11.4 | ✅ | Use `chrome.scripting.executeScript` pattern (bypasses AWS WAF) |
+| 11.5 | ✅ | Skip conversation poll if backfill is running |
+| 11.6 | ✅ | Default "fruitful" group slug as fallback |
+
+**Implementation Notes (2026-02-16):**
+- Fixed broken polling: `executeInSkoolTab()` was deprecated/returning null
+- Rewrote all poll functions to use `chrome.scripting.executeScript` pattern
+- Same pattern as existing `fetchConversationPage()`, `fetchConversationsInTab()`, `fetchMessagesInTab()`
+- Added `fetchMembersInTab()` and `fetchGroupStatsInTab()` helpers
+
+### Phase 12: Full DM Backfill ✅ COMPLETE
+**Goal:** Paginated backfill of complete DM history with sync tracking
+
+| Task | Status | Description |
+|------|--------|-------------|
+| 12.1 | ✅ | Backfill trigger from sidepanel UI |
+| 12.2 | ✅ | Paginated fetch of all conversations |
+| 12.3 | ✅ | Deep message fetch per conversation with pagination |
+| 12.4 | ✅ | Sync tracking to avoid re-fetching already-synced messages |
+| 12.5 | ✅ | Progress reporting to sidepanel during backfill |
+| 12.6 | ✅ | Skip regular polling while backfill is running |
+
 ---
 
 ## Critical File Paths
@@ -541,23 +582,24 @@ return postId;
 ├── esbuild.config.mjs
 ├── src/
 │   ├── background/
-│   │   └── service-worker.ts       # Message relay, polling
+│   │   └── service-worker.ts       # Message relay, polling, backfill, scheduling
 │   ├── content/
-│   │   ├── index.ts                # Main entry, init sequence
-│   │   ├── api-interceptor.ts      # ✅ PRIMARY: Fetch/XHR interception
-│   │   ├── dm-monitor.ts           # Fallback: DOM observation + navigation
-│   │   ├── dm-sender.ts            # Outbound DOM automation (future)
-│   │   ├── websocket-tap.ts        # WebSocket interception (future)
-│   │   └── cookie-extractor.ts     # Cookie management (future)
+│   │   ├── index.ts                # Main entry, message bridge
+│   │   ├── main-world.ts           # MAIN world: fetch/XHR/WebSocket interception
+│   │   ├── dm-sender.ts            # Outbound DM sending (API-based)
+│   │   └── post-publisher.ts       # Post scheduler DOM automation
 │   ├── popup/
 │   │   ├── popup.html
 │   │   ├── popup.tsx               # Status UI
-│   │   └── popup.css
+│   │   ├── popup.css
+│   │   ├── sidepanel.html
+│   │   ├── sidepanel.tsx           # Side panel UI (backfill, stats)
+│   │   └── sidepanel.css
 │   ├── lib/
 │   │   ├── api-client.ts           # 0ne-app API client
-│   │   ├── skool-parser.ts         # DOM parsing utilities (fallback)
 │   │   ├── skool-auth.ts           # Auth token handling
 │   │   ├── jwt-parser.ts           # JWT decoding
+│   │   ├── scheduler-client.ts     # Post scheduler state management
 │   │   └── storage.ts              # Chrome storage wrapper
 │   └── types/
 │       └── index.ts
@@ -682,26 +724,31 @@ COMMIT: "Phase {X.Y}: {Description}"
 
 ## Current Status
 
-### All Core Phases Complete ✅
+### All Phases Complete ✅ (Extension-First Architecture)
 
 **What's Working:**
-- ✅ API interception captures conversations + messages
-- ✅ WebSocket interception for real-time DM events
+- ✅ API interception captures conversations + messages (main-world.ts)
+- ✅ WebSocket interception for real-time DM events (heartbeat + new DM detection)
 - ✅ Data flows to service worker with buffering, dedup, retry
-- ✅ Extension messages sync to GHL via cron job
+- ✅ Extension messages sync to GHL via cron job (sync-skool-dms)
 - ✅ Multi-staff support with routing and attribution
 - ✅ Clerk auth integration for seamless login
-- ✅ Member/KPI sync from Skool admin pages
+- ✅ Member/KPI sync via proactive polling (1hr/6hr intervals)
 - ✅ Analytics sync from Skool dashboard
 - ✅ Post scheduler with DOM automation
+- ✅ Outbound DM sending (API-based via main-world.ts)
+- ✅ Cookie management/push to 0ne-app (6hr intervals)
+- ✅ Proactive polling: conversations (5min), members (1hr), KPIs (6hr)
+- ✅ Full DM backfill with pagination + sync tracking (sidepanel UI)
 
-**Remaining Optional Phases:**
-- Phase 4: Outbound DM sending (GHL replies -> Skool)
-- Phase 6: Cookie management/backup
-- Phase 2B: Full history capture (auto-scroll)
+**Architecture Note (2026-02-16):**
+- Server-side Skool API calls blocked by AWS WAF - extension is sole data collector
+- Killed `sync-skool` cron (was broken since WAF discovery)
+- `sync-skool-dms` cron now only processes extension-captured data → GHL (no server-side fetch)
 
-**Next Recommended:**
-Phase 4 (Outbound DM Sending) or Phase 6 (Cookie Management) based on priority.
+**Remaining Optional:**
+- Phase 2B: Auto-scroll history capture (may not be needed with Phase 12 backfill)
+- Phase 10.9: Scheduled post queue in popup UI (deferred)
 
 ---
 
@@ -711,16 +758,18 @@ Phase 4 (Outbound DM Sending) or Phase 6 (Cookie Management) based on priority.
 |-------|--------|-------------|
 | 1 | ✅ | Extension Foundation |
 | 2 | ✅ | API Interception (Pivot from DOM) |
-| 2B | ⬜ | Full History Capture (Optional) |
+| 2B | ⬜ | Full History Capture via auto-scroll (Optional) |
 | 2C | ✅ | Push to 0ne-app |
 | 3 | ✅ | WebSocket Interception (Real-time) |
-| 4 | ⬜ | Outbound Message Sending |
+| 4 | ✅ | Outbound Message Sending (API-based) |
 | 5 | ✅ | Multi-Staff Support |
-| 6 | ⬜ | Cookie Management |
+| 6 | ✅ | Cookie Management |
 | 7 | ✅ | Clerk Auth Integration |
-| **8** | ✅ | **Member/KPI Sync via Extension** |
-| **9** | ✅ | **Analytics Sync via Extension** |
-| **10** | ✅ | **Post Scheduler via Extension** |
+| 8 | ✅ | Member/KPI Sync via Extension |
+| 9 | ✅ | Analytics Sync via Extension |
+| 10 | ✅ | Post Scheduler via Extension |
+| 11 | ✅ | Proactive Polling (conversations/members/KPIs) |
+| 12 | ✅ | Full DM Backfill with Pagination |
 
 ---
 
