@@ -64,9 +64,16 @@ interface ContactMappingRow {
 export async function POST(request: Request) {
   const startTime = Date.now()
 
+  // Log immediately to confirm webhook is being called
+  console.log('[GHL Webhook] ========== WEBHOOK HIT ==========')
+  console.log('[GHL Webhook] Timestamp:', new Date().toISOString())
+  console.log('[GHL Webhook] Headers:', Object.fromEntries(request.headers.entries()))
+
   try {
     // 1. Get raw body for signature verification
     const rawBody = await request.text()
+    console.log('[GHL Webhook] Raw body length:', rawBody.length)
+    console.log('[GHL Webhook] Raw body preview:', rawBody.slice(0, 200))
 
     // 2. Verify webhook signature
     const signature = request.headers.get('x-ghl-signature') || ''
