@@ -298,6 +298,133 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // Sync community activity daily metrics to skool_community_activity_daily
+    const activityMetrics = metrics.filter(
+      (m) => m.metricType === 'daily_activity_count'
+    )
+    // Also grab daily_active_members for the active column
+    const activeMemberMetrics = metrics.filter(
+      (m) => m.metricType === 'daily_active_members'
+    )
+    const activeByDate = new Map<string, number>()
+    for (const m of activeMemberMetrics) {
+      const d = m.metricDate?.match(/^\d{4}-\d{2}-\d{2}/)?.[0]
+      if (d) activeByDate.set(d, m.metricValue)
+    }
+
+    if (activityMetrics.length > 0) {
+      let activityDaily = 0
+      for (const m of activityMetrics) {
+        const dateKey = m.metricDate?.match(/^\d{4}-\d{2}-\d{2}/)?.[0]
+        if (!dateKey) continue
+
+        const { error: actError } = await supabase
+          .from('skool_community_activity_daily')
+          .upsert({
+            group_slug: m.groupId,
+            date: dateKey,
+            activity_count: m.metricValue,
+            daily_active_members: activeByDate.get(dateKey) ?? null,
+            source: 'extension',
+            updated_at: new Date().toISOString(),
+          }, {
+            onConflict: 'group_slug,date',
+          })
+
+        if (actError) {
+          console.error(`[Extension API] Error upserting activity_daily for ${dateKey}:`, actError)
+        } else {
+          activityDaily++
+        }
+      }
+      if (activityDaily > 0) {
+        console.log(`[Extension API] Synced ${activityDaily} days to skool_community_activity_daily`)
+      }
+    }
+
+    // Sync about page daily metrics to skool_about_page_daily
+    const aboutVisitorMetrics = metrics.filter(
+      (m) => m.metricType === 'daily_about_visitors'
+    )
+    const aboutConversionMetrics = metrics.filter(
+      (m) => m.metricType === 'daily_about_conversion'
+    )
+    const conversionByDate = new Map<string, number>()
+    for (const m of aboutConversionMetrics) {
+      const d = m.metricDate?.match(/^\d{4}-\d{2}-\d{2}/)?.[0]
+      if (d) conversionByDate.set(d, m.metricValue)
+    }
+
+    if (aboutVisitorMetrics.length > 0) {
+      let aboutDaily = 0
+      for (const m of aboutVisitorMetrics) {
+        const dateKey = m.metricDate?.match(/^\d{4}-\d{2}-\d{2}/)?.[0]
+        if (!dateKey) continue
+
+        const convRate = conversionByDate.get(dateKey)
+
+        const { error: aboutError } = await supabase
+          .from('skool_about_page_daily')
+          .upsert({
+            group_slug: m.groupId,
+            date: dateKey,
+            visitors: m.metricValue,
+            conversion_rate: convRate != null ? Math.round(convRate * 100) / 100 : null,
+          }, {
+            onConflict: 'group_slug,date',
+          })
+
+        if (aboutError) {
+          console.error(`[Extension API] Error upserting about_page_daily for ${dateKey}:`, aboutError)
+        } else {
+          aboutDaily++
+        }
+      }
+      if (aboutDaily > 0) {
+        console.log(`[Extension API] Synced ${aboutDaily} days to skool_about_page_daily`)
+      }
+    }
+
+    // Sync snapshot to skool_metrics (one row per day per group)
+    // Collect today's aggregate metrics for the snapshot
+    const today = new Date().toISOString().split('T')[0]
+    const snapshotMetrics: Record<string, Record<string, number>> = {}
+    for (const m of metrics) {
+      if (m.metricDate !== today) continue
+      // Only aggregate non-daily metrics for snapshot
+      if (m.metricType.startsWith('daily_')) continue
+      if (!snapshotMetrics[m.groupId]) snapshotMetrics[m.groupId] = {}
+      snapshotMetrics[m.groupId][m.metricType] = m.metricValue
+    }
+
+    for (const [groupId, snap] of Object.entries(snapshotMetrics)) {
+      const snapshotRow: Record<string, unknown> = {
+        group_slug: groupId,
+        snapshot_date: today,
+      }
+      if (snap.overview_num_members != null) snapshotRow.members_total = snap.overview_num_members
+      if (snap.latest_active_members != null) snapshotRow.members_active = snap.latest_active_members
+      if (snap.overview_mrr != null) snapshotRow.members_active // MRR not in schema, skip
+      if (snap.overview_conversion != null) snapshotRow.conversion_rate = Math.round(snap.overview_conversion * 10000) / 100
+      if (snap.overview_retention != null) snapshotRow.community_activity = Math.round(snap.overview_retention * 10000) / 100
+      if (snap.discovery_category_rank != null) snapshotRow.category_rank = snap.discovery_category_rank
+
+      // Only upsert if we have at least one meaningful field
+      if (Object.keys(snapshotRow).length > 2) {
+        const { error: snapError } = await supabase
+          .from('skool_metrics')
+          .upsert(snapshotRow, {
+            onConflict: 'group_slug,snapshot_date',
+          })
+
+        if (snapError) {
+          console.error(`[Extension API] Error upserting skool_metrics for ${groupId}:`, snapError)
+        } else {
+          console.log(`[Extension API] Synced skool_metrics snapshot for ${groupId} on ${today}`)
+        }
+      }
+    }
+
     console.log(
       `[Extension API] Analytics complete: synced=${synced}, updated=${updated}, skipped=${skipped}, errors=${errors.length}`
     )
