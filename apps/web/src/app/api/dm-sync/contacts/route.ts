@@ -93,16 +93,16 @@ export async function GET(request: NextRequest) {
     }
 
     // Get sync config for ghl_location_id and skool_community_slug
-    const userIds = [...new Set(mappings.map((m) => m.user_id))]
+    const userIds = [...new Set(mappings.map((m) => m.clerk_user_id))]
     const { data: syncConfigs } = await supabase
       .from('dm_sync_config')
-      .select('user_id, ghl_location_id, skool_community_slug')
-      .in('user_id', userIds)
+      .select('clerk_user_id, ghl_location_id, skool_community_slug')
+      .in('clerk_user_id', userIds)
 
     // Build user_id -> config map
     const configMap = new Map<string, { ghl_location_id: string; skool_community_slug: string }>()
     syncConfigs?.forEach((config) => {
-      configMap.set(config.user_id, {
+      configMap.set(config.clerk_user_id, {
         ghl_location_id: config.ghl_location_id,
         skool_community_slug: config.skool_community_slug,
       })
@@ -181,7 +181,7 @@ export async function GET(request: NextRequest) {
       }
 
       // Get config from the configMap
-      const config = configMap.get(mapping.user_id)
+      const config = configMap.get(mapping.clerk_user_id)
 
       return {
         id: mapping.id,

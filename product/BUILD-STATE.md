@@ -28,7 +28,8 @@
 | Skool Inbox | ✅ Complete | `sections/skool-inbox/BUILD-STATE.md` |
 | Hand-Raiser Extension Routing | 🔄 Deploy | `sections/hand-raiser-extension-routing/BUILD-STATE.md` |
 | Skool Chrome Extension | ✅ Complete | `sections/skool-extension/BUILD-STATE.md` |
-| Skool API Migration | 🔄 In Progress | `sections/skool-api-migration/BUILD-STATE.md` |
+| Skool API Migration | ✅ Complete | `sections/skool-api-migration/BUILD-STATE.md` |
+| ID Column Migration | 🔄 In Progress | `sections/id-migration/BUILD-STATE.md` |
 | Hand-Raiser UI | ⬜ Planned | `sections/hand-raiser-ui/BUILD-STATE.md` |
 | Cron Fix + Sync Dashboard | ✅ Complete | `sections/sync-dashboard/BUILD-STATE.md` |
 | Skool Scheduler | ✅ Complete | `sections/skool-scheduler/BUILD-STATE.md` |
@@ -55,14 +56,7 @@
 
 ## Cleanup Tasks (from 2026-02-16 session)
 
-1. **Clean up old pending GHL messages** (~3500 messages older than 24 hours)
-   ```sql
-   UPDATE dm_messages SET status = 'failed'
-   WHERE source = 'ghl' AND status = 'pending'
-   AND created_at < NOW() - INTERVAL '24 hours';
-   ```
-
-2. **Optional: Reduce webhook logging** - Currently verbose for debugging, can trim later
+1. **Optional: Reduce webhook logging** - Currently verbose for debugging, can trim later
 
 ---
 

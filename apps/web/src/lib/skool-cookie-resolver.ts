@@ -92,7 +92,7 @@ async function getDbCookies(userId: string): Promise<string | null> {
   const { data: staffUser } = await supabase
     .from('staff_users')
     .select('skool_user_id')
-    .eq('user_id', userId)
+    .eq('clerk_user_id', userId)
     .eq('is_active', true)
     .order('is_default', { ascending: false })
     .limit(1)

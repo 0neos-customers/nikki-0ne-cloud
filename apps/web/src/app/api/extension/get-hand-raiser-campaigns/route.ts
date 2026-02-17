@@ -152,7 +152,7 @@ export async function GET(request: NextRequest) {
     // Resolve staffSkoolId -> Clerk user_id via staff_users table
     const { data: staffUser } = await supabase
       .from('staff_users')
-      .select('user_id')
+      .select('clerk_user_id')
       .eq('skool_user_id', staffSkoolId)
       .single()
 
@@ -164,13 +164,13 @@ export async function GET(request: NextRequest) {
       )
     }
 
-    const clerkUserId = staffUser.user_id
+    const clerkUserId = staffUser.clerk_user_id
 
     // Query active campaigns for this user
     const { data: campaigns, error } = await supabase
       .from('dm_hand_raiser_campaigns')
       .select('id, post_url, skool_post_id, keyword_filter, ghl_tag, dm_template')
-      .eq('user_id', clerkUserId)
+      .eq('clerk_user_id', clerkUserId)
       .eq('is_active', true)
 
     if (error) {

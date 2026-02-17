@@ -211,10 +211,10 @@ export async function POST(request: NextRequest) {
 
     const supabase = createServerClient()
 
-    // Resolve staffSkoolId -> Clerk user_id via staff_users table
+    // Resolve staffSkoolId -> Clerk clerk_user_id via staff_users table
     const { data: staffUser } = await supabase
       .from('staff_users')
-      .select('user_id')
+      .select('clerk_user_id')
       .eq('skool_user_id', staffSkoolId)
       .single()
 
@@ -225,7 +225,7 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const clerkUserId = staffUser.user_id
+    const clerkUserId = staffUser.clerk_user_id
 
     // Collect unique campaign IDs to batch-fetch campaign details
     const campaignIds = [...new Set(commenters.map((c) => c.campaignId))]
@@ -234,7 +234,7 @@ export async function POST(request: NextRequest) {
     const { data: campaigns, error: campaignError } = await supabase
       .from('dm_hand_raiser_campaigns')
       .select('id, keyword_filter, ghl_tag, dm_template, skool_post_id')
-      .eq('user_id', clerkUserId)
+      .eq('clerk_user_id', clerkUserId)
       .eq('is_active', true)
       .in('id', campaignIds)
 
@@ -325,7 +325,7 @@ export async function POST(request: NextRequest) {
 
           // Queue in dm_messages with source='hand-raiser' for extension pickup
           const messageRow: Omit<DmMessageRow, 'id'> = {
-            user_id: staffSkoolId,
+            clerk_user_id: clerkUserId,
             skool_conversation_id: `hr-pending-${commenter.skoolUserId}`, // Placeholder — extension will resolve actual conversation
             skool_message_id: `hr-${commenter.campaignId}-${commenter.skoolUserId}-${Date.now()}`,
             ghl_message_id: null,
