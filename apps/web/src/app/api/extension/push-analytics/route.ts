@@ -240,6 +240,64 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // Sync daily member metrics to skool_members_daily table
+    const dailyMemberMetrics = metrics.filter(
+      (m) => m.metricType === 'daily_total_members' || m.metricType === 'daily_active_members'
+    )
+
+    if (dailyMemberMetrics.length > 0) {
+      // Group by date
+      const byDate = new Map<string, { total?: number; active?: number; groupId: string }>()
+      for (const m of dailyMemberMetrics) {
+        const dateKey = m.metricDate?.match(/^\d{4}-\d{2}-\d{2}/)?.[0]
+        if (!dateKey) continue
+        const existing = byDate.get(dateKey) || { groupId: m.groupId }
+        if (m.metricType === 'daily_total_members') existing.total = m.metricValue
+        if (m.metricType === 'daily_active_members') existing.active = m.metricValue
+        byDate.set(dateKey, existing)
+      }
+
+      // Sort dates to calculate new_members (delta from previous day)
+      const sortedDates = [...byDate.keys()].sort()
+      let membersDaily = 0
+
+      for (let i = 0; i < sortedDates.length; i++) {
+        const date = sortedDates[i]
+        const entry = byDate.get(date)!
+        const prevDate = i > 0 ? sortedDates[i - 1] : null
+        const prevEntry = prevDate ? byDate.get(prevDate) : null
+        const newMembers = (entry.total != null && prevEntry?.total != null)
+          ? entry.total - prevEntry.total
+          : null
+
+        if (entry.total != null) {
+          const { error: dailyError } = await supabase
+            .from('skool_members_daily')
+            .upsert({
+              group_slug: entry.groupId,
+              date,
+              total_members: entry.total,
+              active_members: entry.active ?? null,
+              new_members: newMembers != null && newMembers >= 0 ? newMembers : null,
+              source: 'extension',
+              updated_at: new Date().toISOString(),
+            }, {
+              onConflict: 'group_slug,date',
+            })
+
+          if (dailyError) {
+            console.error(`[Extension API] Error upserting members_daily for ${date}:`, dailyError)
+          } else {
+            membersDaily++
+          }
+        }
+      }
+
+      if (membersDaily > 0) {
+        console.log(`[Extension API] Synced ${membersDaily} days to skool_members_daily`)
+      }
+    }
+
     console.log(
       `[Extension API] Analytics complete: synced=${synced}, updated=${updated}, skipped=${skipped}, errors=${errors.length}`
     )
