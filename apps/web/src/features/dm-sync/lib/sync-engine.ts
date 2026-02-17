@@ -174,7 +174,7 @@ export async function syncInboundMessages(
     const { data: syncConfig, error: configError } = await supabase
       .from('dm_sync_config')
       .select('*')
-      .eq('user_id', userId)
+      .eq('clerk_user_id', userId)
       .eq('enabled', true)
       .single()
 
@@ -305,7 +305,7 @@ async function processConversation(
   const { data: existingMessages } = await supabase
     .from('dm_messages')
     .select('skool_message_id')
-    .eq('user_id', userId)
+    .eq('clerk_user_id', userId)
     .eq('skool_conversation_id', conversation.channelId)
 
   const syncedMessageIds = new Set(
@@ -421,7 +421,7 @@ async function processConversation(
 
       // Record in dm_messages table
       const messageRow: Omit<DmMessageRow, 'id'> = {
-        user_id: userId,
+        clerk_user_id: userId,
         skool_conversation_id: conversation.channelId,
         skool_message_id: message.id,
         ghl_message_id: ghlMessageId,
@@ -508,7 +508,7 @@ export async function sendPendingMessages(
     const { data: syncConfig, error: configError } = await supabase
       .from('dm_sync_config')
       .select('*')
-      .eq('user_id', userId)
+      .eq('clerk_user_id', userId)
       .eq('enabled', true)
       .single()
 
@@ -528,7 +528,7 @@ export async function sendPendingMessages(
     const { data: pendingMessages, error: queryError } = await supabase
       .from('dm_messages')
       .select('*')
-      .eq('user_id', userId)
+      .eq('clerk_user_id', userId)
       .eq('direction', 'outbound')
       .eq('status', 'pending')
       .neq('source', 'hand-raiser') // Skip hand-raisers, extension handles these
@@ -690,7 +690,7 @@ export async function syncExtensionMessages(
     const { data: syncConfig, error: configError } = await supabase
       .from('dm_sync_config')
       .select('*')
-      .eq('user_id', userId)
+      .eq('clerk_user_id', userId)
       .eq('enabled', true)
       .single()
 
@@ -721,7 +721,7 @@ export async function syncExtensionMessages(
     const { data: pendingMessages, error: queryError } = await supabase
       .from('dm_messages')
       .select('*')
-      .eq('user_id', userId)
+      .eq('clerk_user_id', userId)
       .eq('status', 'pending')
       .is('ghl_message_id', null)
       .order('created_at', { ascending: true })
@@ -974,7 +974,7 @@ export async function processHandRaisers(
     const { data: syncConfig, error: configError } = await supabase
       .from('dm_sync_config')
       .select('*')
-      .eq('user_id', userId)
+      .eq('clerk_user_id', userId)
       .eq('enabled', true)
       .single()
 
@@ -987,7 +987,7 @@ export async function processHandRaisers(
     const { data: campaigns, error: campaignsError } = await supabase
       .from('dm_hand_raiser_campaigns')
       .select('*')
-      .eq('user_id', userId)
+      .eq('clerk_user_id', userId)
       .eq('is_active', true)
 
     if (campaignsError) {
@@ -1159,7 +1159,7 @@ async function processHandRaiserCampaign(
         // Queue DM in dm_messages table with status 'pending'
         // source='hand-raiser' marks this for extension pickup (not cloud cron)
         const messageRow: Omit<DmMessageRow, 'id'> = {
-          user_id: userId,
+          clerk_user_id: userId,
           skool_conversation_id: conversation.channelId,
           skool_message_id: `hr-${campaign.id}-${comment.userId}-${Date.now()}`, // Synthetic ID for hand-raiser
           ghl_message_id: null,
@@ -1278,13 +1278,13 @@ function interpolateTemplate(
  * Get all users with active hand-raiser campaigns
  */
 export async function getUsersWithActiveHandRaisers(): Promise<
-  Array<{ user_id: string }>
+  Array<{ clerk_user_id: string }>
 > {
   const supabase = createServerClient()
 
   const { data, error } = await supabase
     .from('dm_hand_raiser_campaigns')
-    .select('user_id')
+    .select('clerk_user_id')
     .eq('is_active', true)
 
   if (error) {
@@ -1293,21 +1293,21 @@ export async function getUsersWithActiveHandRaisers(): Promise<
   }
 
   // Deduplicate user IDs
-  const uniqueUserIds = [...new Set((data || []).map((d) => d.user_id))]
-  return uniqueUserIds.map((user_id) => ({ user_id }))
+  const uniqueUserIds = [...new Set((data || []).map((d) => d.clerk_user_id))]
+  return uniqueUserIds.map((clerk_user_id) => ({ clerk_user_id }))
 }
 
 /**
  * Get all enabled sync configs for cron processing
  */
 export async function getEnabledSyncConfigs(): Promise<
-  Array<{ user_id: string; skool_community_slug: string; ghl_location_id: string }>
+  Array<{ clerk_user_id: string; skool_community_slug: string; ghl_location_id: string }>
 > {
   const supabase = createServerClient()
 
   const { data, error } = await supabase
     .from('dm_sync_config')
-    .select('user_id, skool_community_slug, ghl_location_id')
+    .select('clerk_user_id, skool_community_slug, ghl_location_id')
     .eq('enabled', true)
 
   if (error) {
@@ -1466,7 +1466,7 @@ export class DmSyncEngine {
     const { data } = await supabase
       .from('dm_messages')
       .select('id')
-      .eq('user_id', this.config.userId)
+      .eq('clerk_user_id', this.config.userId)
       .eq('skool_message_id', skoolMessageId)
       .single()
 
@@ -1483,7 +1483,7 @@ export class DmSyncEngine {
     const supabase = createServerClient()
 
     const messageRow: Omit<DmMessageRow, 'id'> = {
-      user_id: this.config.userId,
+      clerk_user_id: this.config.userId,
       skool_conversation_id: skoolMessage.conversationId,
       skool_message_id: skoolMessage.id,
       ghl_message_id: ghlMessageId,
@@ -1524,7 +1524,7 @@ export class DmSyncEngine {
     const { data: conversations } = await supabase
       .from('dm_messages')
       .select('skool_conversation_id')
-      .eq('user_id', this.config.userId)
+      .eq('clerk_user_id', this.config.userId)
 
     const uniqueConversations = new Set(
       (conversations || []).map((c) => c.skool_conversation_id)
@@ -1534,7 +1534,7 @@ export class DmSyncEngine {
     const { data: messages } = await supabase
       .from('dm_messages')
       .select('status, synced_at')
-      .eq('user_id', this.config.userId)
+      .eq('clerk_user_id', this.config.userId)
 
     const totalMessages = messages?.length || 0
     const pendingMessages = messages?.filter((m) => m.status === 'pending').length || 0
@@ -1591,12 +1591,12 @@ export async function createSyncEngineFromConfig(
   }
 
   // Resolve cookies from DB (extension-pushed) or env var fallback
-  const cookies = await getSkoolCookies(config.user_id)
+  const cookies = await getSkoolCookies(config.clerk_user_id)
 
   return new DmSyncEngine({
     config: {
       id: config.id,
-      userId: config.user_id,
+      userId: config.clerk_user_id,
       skoolCommunitySlug: config.skool_community_slug,
       ghlLocationId: config.ghl_location_id,
       enabled: config.enabled,
