@@ -39,6 +39,12 @@ interface IncomingMember {
   points?: number
   joinedAt?: string | null
   lastSeenAt?: string | null
+  // Additional fields from Phase 6 full member sync
+  username?: string
+  bio?: string
+  location?: string
+  role?: string                                       // 'admin', 'moderator', 'member'
+  questionsAndAnswers?: Record<string, string>[] | null  // Survey/question answers on join
 }
 
 interface PushMembersRequest {
@@ -148,7 +154,7 @@ export async function POST(request: NextRequest) {
     // Upsert members in batches
     for (const member of members) {
       try {
-        const memberRow = {
+        const memberRow: Record<string, unknown> = {
           user_id: staffSkoolId,
           group_id: groupId,
           skool_user_id: member.skoolUserId,
@@ -161,6 +167,13 @@ export async function POST(request: NextRequest) {
           last_seen_at: member.lastSeenAt || null,
           synced_at: new Date().toISOString(),
         }
+
+        // Add additional fields if present (Phase 6)
+        if (member.username) memberRow.skool_username = member.username
+        if (member.bio) memberRow.bio = member.bio
+        if (member.location) memberRow.location = member.location
+        if (member.role) memberRow.role = member.role
+        if (member.questionsAndAnswers) memberRow.questions_and_answers = JSON.stringify(member.questionsAndAnswers)
 
         const { error } = await supabase
           .from('skool_members')
