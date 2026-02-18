@@ -12,9 +12,13 @@ export interface ContactActivity {
   skool_user_id: string
   skool_username: string | null
   skool_display_name: string | null
-  ghl_contact_id: string
-  match_method: 'skool_id' | 'email' | 'name' | 'synthetic' | null
+  ghl_contact_id: string | null
+  match_method: 'skool_id' | 'email' | 'name' | 'synthetic' | 'manual' | 'no_email' | null
+  email: string | null
+  phone: string | null
+  contact_type: 'community_member' | 'dm_contact' | 'unknown' | null
   created_at: string
+  skool_conversation_id: string | null
   stats: {
     inbound_count: number
     outbound_count: number
@@ -32,6 +36,8 @@ export interface ContactActivity {
  */
 export interface ContactActivitySummary {
   total_contacts: number
+  matched_contacts: number
+  unmatched_contacts: number
   total_messages: number
   contacts_with_pending: number
   contacts_with_failed: number
@@ -43,6 +49,7 @@ export interface ContactActivitySummary {
 export interface UseContactActivityOptions {
   search?: string
   matchMethod?: string
+  matchStatus?: string
   status?: string
   limit?: number
   offset?: number
@@ -74,6 +81,9 @@ export function useContactActivity(
   if (options.status && options.status !== 'all') {
     params.set('status', options.status)
   }
+  if (options.matchStatus && options.matchStatus !== 'all') {
+    params.set('match_status', options.matchStatus)
+  }
   if (options.limit) params.set('limit', String(options.limit))
   if (options.offset) params.set('offset', String(options.offset))
 
@@ -90,6 +100,8 @@ export function useContactActivity(
     contacts: data?.contacts || [],
     summary: data?.summary || {
       total_contacts: 0,
+      matched_contacts: 0,
+      unmatched_contacts: 0,
       total_messages: 0,
       contacts_with_pending: 0,
       contacts_with_failed: 0,

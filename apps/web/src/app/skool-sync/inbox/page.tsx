@@ -8,6 +8,7 @@
  */
 
 import { useState, useEffect } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { MessageSquare, Inbox } from 'lucide-react'
 import { ConversationList } from '@/features/dm-sync/components/ConversationList'
 import { ConversationDetail } from '@/features/dm-sync/components/ConversationDetail'
@@ -43,7 +44,9 @@ function EmptyState() {
 // =============================================================================
 
 export default function InboxPage() {
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const searchParams = useSearchParams()
+  const conversationParam = searchParams.get('conversation')
+  const [selectedId, setSelectedId] = useState<string | null>(conversationParam)
   const [staffSkoolId, setStaffSkoolId] = useState<string>(DEFAULT_STAFF_SKOOL_ID)
 
   // Fetch default staff user's Skool ID

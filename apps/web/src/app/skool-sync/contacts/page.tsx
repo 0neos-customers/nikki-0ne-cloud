@@ -16,6 +16,10 @@ import {
   TableHead,
   TableHeader,
   TableRow,
+  Tabs,
+  TabsList,
+  TabsTrigger,
+  TabsContent,
   Select,
   SelectContent,
   SelectItem,
@@ -35,8 +39,14 @@ import {
   CheckCircle2,
   XCircle,
   Search,
+  Pencil,
+  Zap,
+  HelpCircle,
+  Inbox,
 } from 'lucide-react'
 import { useContactActivity, type ContactActivity } from '@/features/dm-sync'
+import { useSyntheticCreate } from '@/features/dm-sync/hooks/use-contact-mutations'
+import { ContactEditDialog } from '@/features/dm-sync/components/ContactEditDialog'
 
 // Match method options for filter
 const MATCH_METHODS = [
@@ -45,6 +55,8 @@ const MATCH_METHODS = [
   { value: 'email', label: 'Email' },
   { value: 'name', label: 'Name' },
   { value: 'synthetic', label: 'Synthetic' },
+  { value: 'manual', label: 'Manual' },
+  { value: 'no_email', label: 'No Email' },
 ]
 
 // Status options for filter
@@ -61,14 +73,10 @@ function buildGhlContactUrl(locationId: string, contactId: string): string {
 }
 
 // Helper to convert username to display name
-// e.g. "jamirah-west-9157" -> "Jamirah West"
 function usernameToDisplayName(username: string | null): string {
   if (!username) return ''
-  // Remove @ prefix if present
   let name = username.replace(/^@/, '')
-  // Remove trailing numbers (e.g., -9157)
   name = name.replace(/-\d+$/, '')
-  // Replace hyphens with spaces and title case
   return name
     .split('-')
     .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
@@ -78,9 +86,19 @@ function usernameToDisplayName(username: string | null): string {
 // Helper to build Skool member search URL
 function buildSkoolSearchUrl(communitySlug: string, username: string | null): string {
   if (!communitySlug || !username) return ''
-  // Convert username to search-friendly display name
   const searchName = usernameToDisplayName(username)
   return `https://www.skool.com/${communitySlug}/-/search?q=${encodeURIComponent(searchName)}&t=members`
+}
+
+// Contact type badge
+function ContactTypeBadge({ type }: { type: string | null }) {
+  if (type === 'community_member') {
+    return <Badge className="bg-green-100 text-green-800 border-green-200 text-[10px] px-1.5 py-0">Member</Badge>
+  }
+  if (type === 'dm_contact') {
+    return <Badge className="bg-blue-100 text-blue-800 border-blue-200 text-[10px] px-1.5 py-0">DM</Badge>
+  }
+  return null
 }
 
 // Match method badge component
@@ -90,6 +108,8 @@ function MatchMethodBadge({ method }: { method: ContactActivity['match_method'] 
     email: { className: 'bg-green-100 text-green-800 border-green-200', label: 'Email' },
     name: { className: 'bg-purple-100 text-purple-800 border-purple-200', label: 'Name' },
     synthetic: { className: 'bg-yellow-100 text-yellow-800 border-yellow-200', label: 'Synthetic' },
+    manual: { className: 'bg-orange-100 text-orange-800 border-orange-200', label: 'Manual' },
+    no_email: { className: 'bg-gray-100 text-gray-600', label: 'No Email' },
   }
 
   const config = method ? variants[method] : { className: 'bg-gray-100 text-gray-600', label: '-' }
@@ -182,13 +202,103 @@ function StatsCard({
   )
 }
 
-// Contacts table component
-function ContactsTable({
+// Action links for each contact row
+function ContactActions({
+  contact,
+  onEdit,
+  onSynthetic,
+  showSynthetic,
+}: {
+  contact: ContactActivity
+  onEdit: () => void
+  onSynthetic?: () => void
+  showSynthetic: boolean
+}) {
+  const isMatched = !!contact.ghl_contact_id
+
+  return (
+    <div className="flex items-center justify-end gap-1.5">
+      {/* Inbox deep link */}
+      {contact.skool_conversation_id ? (
+        <a
+          href={`/skool-sync/inbox?conversation=${contact.skool_conversation_id}`}
+          className="inline-flex items-center justify-center h-7 w-7 rounded text-muted-foreground hover:text-foreground hover:bg-muted"
+          title="Open in Inbox"
+        >
+          <Inbox className="h-3.5 w-3.5" />
+        </a>
+      ) : (
+        <span className="inline-flex items-center justify-center h-7 w-7 text-muted-foreground/30">
+          <Inbox className="h-3.5 w-3.5" />
+        </span>
+      )}
+
+      {/* Skool Link */}
+      {contact.skool_community_slug && contact.skool_username ? (
+        <a
+          href={buildSkoolSearchUrl(contact.skool_community_slug, contact.skool_username)}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center justify-center h-7 w-7 rounded text-muted-foreground hover:text-foreground hover:bg-muted"
+          title="Search in Skool"
+        >
+          <span className="text-xs font-semibold">S</span>
+        </a>
+      ) : (
+        <span className="inline-flex items-center justify-center h-7 w-7 text-muted-foreground/30">
+          <span className="text-xs font-semibold">S</span>
+        </span>
+      )}
+
+      {/* GHL Link */}
+      {isMatched && contact.ghl_location_id && contact.ghl_contact_id ? (
+        <a
+          href={buildGhlContactUrl(contact.ghl_location_id, contact.ghl_contact_id)}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center justify-center h-7 w-7 rounded text-primary hover:text-primary/80 hover:bg-muted"
+          title="Open in GHL"
+        >
+          <span className="text-xs font-semibold">G</span>
+        </a>
+      ) : (
+        <span className="inline-flex items-center justify-center h-7 w-7 text-muted-foreground/30">
+          <span className="text-xs font-semibold">G</span>
+        </span>
+      )}
+
+      {/* Edit button */}
+      <button
+        onClick={onEdit}
+        className="inline-flex items-center justify-center h-7 w-7 rounded text-muted-foreground hover:text-foreground hover:bg-muted"
+        title="Edit contact"
+      >
+        <Pencil className="h-3.5 w-3.5" />
+      </button>
+
+      {/* Synthetic button (unmatched only) */}
+      {showSynthetic && onSynthetic && (
+        <button
+          onClick={onSynthetic}
+          className="inline-flex items-center justify-center h-7 w-7 rounded text-yellow-600 hover:text-yellow-700 hover:bg-yellow-50"
+          title="Create synthetic GHL contact"
+        >
+          <Zap className="h-3.5 w-3.5" />
+        </button>
+      )}
+    </div>
+  )
+}
+
+// Contacts table for matched tab
+function MatchedTable({
   contacts,
   isLoading,
+  onEditContact,
 }: {
   contacts: ContactActivity[]
   isLoading: boolean
+  onEditContact: (contact: ContactActivity) => void
 }) {
   if (isLoading) {
     return (
@@ -202,10 +312,7 @@ function ContactsTable({
     return (
       <div className="flex h-48 flex-col items-center justify-center text-center border rounded-lg bg-muted/50">
         <Users className="h-12 w-12 text-muted-foreground/50 mb-4" />
-        <p className="text-muted-foreground">No contacts found</p>
-        <p className="text-sm text-muted-foreground/70 mt-1">
-          Contacts will appear here once synced from Skool
-        </p>
+        <p className="text-muted-foreground">No matched contacts found</p>
       </div>
     )
   }
@@ -217,23 +324,38 @@ function ContactsTable({
           <TableRow>
             <TableHead className="w-[200px]">Name</TableHead>
             <TableHead className="w-[140px]">Username</TableHead>
-            <TableHead className="w-[100px]">Method</TableHead>
-            <TableHead className="w-[120px]">Messages</TableHead>
-            <TableHead className="w-[140px]">Status</TableHead>
-            <TableHead className="w-[100px] text-right">Links</TableHead>
+            <TableHead className="w-[180px]">Email</TableHead>
+            <TableHead className="w-[90px]">Method</TableHead>
+            <TableHead className="w-[100px]">Messages</TableHead>
+            <TableHead className="w-[120px]">Status</TableHead>
+            <TableHead className="w-[160px] text-right">Actions</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
           {contacts.map((contact) => {
-            // Derive display name from username if not stored
             const displayName =
               contact.skool_display_name || usernameToDisplayName(contact.skool_username)
 
             return (
               <TableRow key={contact.id}>
-                <TableCell className="font-medium">{displayName || '-'}</TableCell>
-                <TableCell className="text-muted-foreground">
+                <TableCell>
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-medium text-sm">
+                      {displayName || (
+                        <span className="flex items-center gap-1 text-muted-foreground">
+                          <HelpCircle className="h-3 w-3" />
+                          {contact.skool_user_id.slice(0, 8)}...
+                        </span>
+                      )}
+                    </span>
+                    <ContactTypeBadge type={contact.contact_type} />
+                  </div>
+                </TableCell>
+                <TableCell className="text-muted-foreground text-sm">
                   {contact.skool_username ? `@${contact.skool_username}` : '-'}
+                </TableCell>
+                <TableCell className="text-sm text-muted-foreground truncate max-w-[180px]">
+                  {contact.email || '-'}
                 </TableCell>
                 <TableCell>
                   <MatchMethodBadge method={contact.match_method} />
@@ -245,41 +367,97 @@ function ContactsTable({
                   <StatusIndicator contact={contact} />
                 </TableCell>
                 <TableCell className="text-right">
-                  <div className="flex items-center justify-end gap-2">
-                    {/* Skool Link */}
-                    {contact.skool_community_slug && contact.skool_username ? (
-                      <a
-                        href={buildSkoolSearchUrl(
-                          contact.skool_community_slug,
-                          contact.skool_username
-                        )}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center text-muted-foreground hover:text-foreground"
-                        title="Search in Skool"
-                      >
-                        <span className="text-xs font-medium">S</span>
-                        <ExternalLink className="h-3 w-3" />
-                      </a>
-                    ) : (
-                      <span className="text-muted-foreground/50 text-xs">S</span>
-                    )}
-                    {/* GHL Link */}
-                    {contact.ghl_location_id && contact.ghl_contact_id ? (
-                      <a
-                        href={buildGhlContactUrl(contact.ghl_location_id, contact.ghl_contact_id)}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center text-primary hover:text-primary/80"
-                        title="Open in GHL"
-                      >
-                        <span className="text-xs font-medium">G</span>
-                        <ExternalLink className="h-3 w-3" />
-                      </a>
-                    ) : (
-                      <span className="text-muted-foreground/50 text-xs">G</span>
-                    )}
+                  <ContactActions
+                    contact={contact}
+                    onEdit={() => onEditContact(contact)}
+                    showSynthetic={false}
+                  />
+                </TableCell>
+              </TableRow>
+            )
+          })}
+        </TableBody>
+      </Table>
+    </div>
+  )
+}
+
+// Contacts table for unmatched tab
+function UnmatchedTable({
+  contacts,
+  isLoading,
+  onEditContact,
+  onSyntheticCreate,
+}: {
+  contacts: ContactActivity[]
+  isLoading: boolean
+  onEditContact: (contact: ContactActivity) => void
+  onSyntheticCreate: (contact: ContactActivity) => void
+}) {
+  if (isLoading) {
+    return (
+      <div className="flex h-48 items-center justify-center">
+        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+      </div>
+    )
+  }
+
+  if (contacts.length === 0) {
+    return (
+      <div className="flex h-48 flex-col items-center justify-center text-center border rounded-lg bg-muted/50">
+        <CheckCircle2 className="h-12 w-12 text-green-500/50 mb-4" />
+        <p className="text-muted-foreground">All contacts are matched!</p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="rounded-md border">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead className="w-[200px]">Name</TableHead>
+            <TableHead className="w-[140px]">Username</TableHead>
+            <TableHead className="w-[180px]">Email</TableHead>
+            <TableHead className="w-[100px]">Type</TableHead>
+            <TableHead className="w-[160px] text-right">Actions</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {contacts.map((contact) => {
+            const displayName =
+              contact.skool_display_name || usernameToDisplayName(contact.skool_username)
+
+            return (
+              <TableRow key={contact.id}>
+                <TableCell>
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-medium text-sm">
+                      {displayName || (
+                        <span className="flex items-center gap-1 text-muted-foreground">
+                          <HelpCircle className="h-3 w-3" />
+                          {contact.skool_user_id.slice(0, 8)}...
+                        </span>
+                      )}
+                    </span>
                   </div>
+                </TableCell>
+                <TableCell className="text-muted-foreground text-sm">
+                  {contact.skool_username ? `@${contact.skool_username}` : '-'}
+                </TableCell>
+                <TableCell className="text-sm text-muted-foreground truncate max-w-[180px]">
+                  {contact.email || '-'}
+                </TableCell>
+                <TableCell>
+                  <ContactTypeBadge type={contact.contact_type} />
+                </TableCell>
+                <TableCell className="text-right">
+                  <ContactActions
+                    contact={contact}
+                    onEdit={() => onEditContact(contact)}
+                    onSynthetic={() => onSyntheticCreate(contact)}
+                    showSynthetic={true}
+                  />
                 </TableCell>
               </TableRow>
             )
@@ -296,22 +474,39 @@ export default function ContactActivityPage() {
   const [matchMethod, setMatchMethod] = useState('all')
   const [status, setStatus] = useState('all')
   const [debouncedSearch, setDebouncedSearch] = useState('')
+  const [activeTab, setActiveTab] = useState('matched')
+  const [editContact, setEditContact] = useState<ContactActivity | null>(null)
+  const [editDialogOpen, setEditDialogOpen] = useState(false)
+
+  const { createSynthetic, isLoading: isSyntheticLoading } = useSyntheticCreate()
 
   // Debounce search input
   const handleSearchChange = (value: string) => {
     setSearch(value)
-    // Simple debounce using setTimeout
     const timeoutId = setTimeout(() => {
       setDebouncedSearch(value)
     }, 300)
     return () => clearTimeout(timeoutId)
   }
 
+  const matchStatus = activeTab === 'matched' ? 'matched' : activeTab === 'unmatched' ? 'unmatched' : 'all'
+
   const { contacts, summary, isLoading, error, refresh } = useContactActivity({
     search: debouncedSearch,
-    matchMethod,
-    status,
+    matchMethod: activeTab === 'matched' ? matchMethod : undefined,
+    matchStatus,
+    status: activeTab === 'matched' ? status : undefined,
   })
+
+  const handleEditContact = (contact: ContactActivity) => {
+    setEditContact(contact)
+    setEditDialogOpen(true)
+  }
+
+  const handleSyntheticCreate = async (contact: ContactActivity) => {
+    await createSynthetic(contact.skool_user_id)
+    refresh()
+  }
 
   return (
     <div className="space-y-6">
@@ -320,7 +515,7 @@ export default function ContactActivityPage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Contact Sync Activity</h1>
           <p className="text-sm text-muted-foreground">
-            Monitor sync status for each Skool community member
+            Manage Skool contacts and their GHL mappings
           </p>
         </div>
         <Button variant="outline" size="sm" onClick={() => refresh()} disabled={isLoading}>
@@ -333,27 +528,27 @@ export default function ContactActivityPage() {
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <StatsCard
           icon={Users}
-          label="Contacts"
-          value={summary.total_contacts}
-          className="bg-blue-100 text-blue-600"
+          label="Matched"
+          value={summary.matched_contacts}
+          className="bg-green-100 text-green-600"
+        />
+        <StatsCard
+          icon={AlertCircle}
+          label="Unmatched"
+          value={summary.unmatched_contacts}
+          className="bg-yellow-100 text-yellow-600"
         />
         <StatsCard
           icon={MessageSquare}
           label="Messages"
           value={summary.total_messages}
-          className="bg-green-100 text-green-600"
+          className="bg-blue-100 text-blue-600"
         />
         <StatsCard
           icon={Clock}
           label="Pending"
           value={summary.contacts_with_pending}
-          className="bg-yellow-100 text-yellow-600"
-        />
-        <StatsCard
-          icon={AlertCircle}
-          label="Failed"
-          value={summary.contacts_with_failed}
-          className="bg-red-100 text-red-600"
+          className="bg-orange-100 text-orange-600"
         />
       </div>
 
@@ -365,7 +560,7 @@ export default function ContactActivityPage() {
         </div>
       )}
 
-      {/* Main Content Card */}
+      {/* Main Content Card with Tabs */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
@@ -373,61 +568,115 @@ export default function ContactActivityPage() {
             Contacts
           </CardTitle>
           <CardDescription>
-            Skool members mapped to GHL contacts with sync status
+            Skool contacts with GHL mapping status
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          {/* Filters */}
-          <div className="flex flex-col sm:flex-row gap-4">
-            {/* Search */}
-            <div className="relative flex-1">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input
-                placeholder="Search by name..."
-                value={search}
-                onChange={(e) => handleSearchChange(e.target.value)}
-                className="pl-9"
-              />
+          <Tabs value={activeTab} onValueChange={setActiveTab}>
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+              <TabsList>
+                <TabsTrigger value="matched">
+                  Matched ({summary.matched_contacts})
+                </TabsTrigger>
+                <TabsTrigger value="unmatched">
+                  Unmatched ({summary.unmatched_contacts})
+                </TabsTrigger>
+              </TabsList>
+
+              {/* Filters — only show for matched tab */}
+              {activeTab === 'matched' && (
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <div className="relative flex-1 min-w-[200px]">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                    <Input
+                      placeholder="Search by name..."
+                      value={search}
+                      onChange={(e) => handleSearchChange(e.target.value)}
+                      className="pl-9"
+                    />
+                  </div>
+                  <Select value={matchMethod} onValueChange={setMatchMethod}>
+                    <SelectTrigger className="w-[140px]">
+                      <SelectValue placeholder="Method" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {MATCH_METHODS.map((method) => (
+                        <SelectItem key={method.value} value={method.value}>
+                          {method.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Select value={status} onValueChange={setStatus}>
+                    <SelectTrigger className="w-[130px]">
+                      <SelectValue placeholder="Status" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {STATUS_OPTIONS.map((opt) => (
+                        <SelectItem key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+
+              {/* Search for unmatched tab */}
+              {activeTab === 'unmatched' && (
+                <div className="relative min-w-[200px]">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    placeholder="Search by name..."
+                    value={search}
+                    onChange={(e) => handleSearchChange(e.target.value)}
+                    className="pl-9"
+                  />
+                </div>
+              )}
             </div>
 
-            {/* Match Method Filter */}
-            <Select value={matchMethod} onValueChange={setMatchMethod}>
-              <SelectTrigger className="w-[160px]">
-                <SelectValue placeholder="Match Method" />
-              </SelectTrigger>
-              <SelectContent>
-                {MATCH_METHODS.map((method) => (
-                  <SelectItem key={method.value} value={method.value}>
-                    {method.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <TabsContent value="matched" className="mt-4">
+              <MatchedTable
+                contacts={contacts}
+                isLoading={isLoading}
+                onEditContact={handleEditContact}
+              />
+            </TabsContent>
 
-            {/* Status Filter */}
-            <Select value={status} onValueChange={setStatus}>
-              <SelectTrigger className="w-[140px]">
-                <SelectValue placeholder="Status" />
-              </SelectTrigger>
-              <SelectContent>
-                {STATUS_OPTIONS.map((opt) => (
-                  <SelectItem key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
+            <TabsContent value="unmatched" className="mt-4">
+              <UnmatchedTable
+                contacts={contacts}
+                isLoading={isLoading}
+                onEditContact={handleEditContact}
+                onSyntheticCreate={handleSyntheticCreate}
+              />
+            </TabsContent>
+          </Tabs>
 
-          {/* Table */}
-          <ContactsTable contacts={contacts} isLoading={isLoading} />
-
-          {/* Auto-refresh indicator */}
           <p className="text-xs text-muted-foreground text-center">
             Auto-refreshes every 30 seconds
           </p>
         </CardContent>
       </Card>
+
+      {/* Edit Dialog */}
+      <ContactEditDialog
+        open={editDialogOpen}
+        onOpenChange={setEditDialogOpen}
+        contact={editContact}
+        onSuccess={() => refresh()}
+      />
+
+      {/* Synthetic loading overlay */}
+      {isSyntheticLoading && (
+        <div className="fixed inset-0 bg-black/20 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 shadow-lg flex items-center gap-3">
+            <Loader2 className="h-5 w-5 animate-spin" />
+            <span className="text-sm font-medium">Creating synthetic contact...</span>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
