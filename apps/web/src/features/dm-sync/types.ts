@@ -56,7 +56,22 @@ export interface DmSyncConfigRow {
   clerk_user_id: string
   skool_community_slug: string
   ghl_location_id: string
+  skool_community_id: string | null
   enabled: boolean
+  created_at: string
+  updated_at: string
+}
+
+/**
+ * Database row for contact_channels table (per-staff channel cache)
+ */
+export interface ContactChannelRow {
+  id: string
+  clerk_user_id: string
+  skool_user_id: string
+  staff_skool_id: string
+  skool_channel_id: string
+  resolved_at: string
   created_at: string
   updated_at: string
 }
