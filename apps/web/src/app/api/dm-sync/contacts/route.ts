@@ -31,6 +31,7 @@ interface ContactActivity {
     failed_count: number
     last_activity_at: string | null
   }
+  survey_answers: Array<{ question: string; answer: string }> | null
   ghl_location_id: string
   skool_community_slug: string
 }
@@ -192,6 +193,22 @@ export async function GET(request: NextRequest) {
       .select('skool_user_id, staff_skool_id, skool_channel_id')
       .in('skool_user_id', pageSkoolUserIds)
 
+    // Fetch survey_answers from skool_members for this page's contacts
+    const { data: memberSurveys } = await supabase
+      .from('skool_members')
+      .select('skool_user_id, survey_answers')
+      .in('skool_user_id', pageSkoolUserIds)
+
+    const surveyMap = new Map<string, Array<{ question: string; answer: string }> | null>()
+    memberSurveys?.forEach((m) => {
+      // Normalize: survey data can be array directly or nested {survey: [...]}
+      let answers = m.survey_answers as unknown
+      if (answers && typeof answers === 'object' && !Array.isArray(answers) && 'survey' in (answers as Record<string, unknown>)) {
+        answers = (answers as { survey: unknown }).survey
+      }
+      surveyMap.set(m.skool_user_id, Array.isArray(answers) ? answers : null)
+    })
+
     // Build channels map per user (with staff display name lookup)
     const channelsMap = new Map<string, ContactChannelInfo[]>()
 
@@ -287,6 +304,7 @@ export async function GET(request: NextRequest) {
         skool_conversation_id: conversationMap.get(mapping.skool_user_id) || null,
         channels: channelsMap.get(mapping.skool_user_id) || [],
         stats,
+        survey_answers: surveyMap.get(mapping.skool_user_id) || null,
         ghl_location_id: config?.ghl_location_id || '',
         skool_community_slug: config?.skool_community_slug || '',
       }

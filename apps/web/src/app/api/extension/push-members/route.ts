@@ -1,16 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerClient } from '@0ne/db/server'
 import { corsHeaders, validateExtensionAuth } from '@/lib/extension-auth'
+import { GHLClient } from '@/features/kpi/lib/ghl-client'
 
 export { OPTIONS } from '@/lib/extension-auth'
 
 export const dynamic = 'force-dynamic'
+export const maxDuration = 120 // Allow up to 2 minutes for auto-matching
 
 /**
  * Chrome Extension Push Members API
  *
  * Receives member data from the Skool Chrome extension
  * and stores them in the skool_members table.
+ *
+ * Also extracts email/phone from survey answers and
+ * auto-matches unmatched members to GHL contacts.
  */
 
 // =============================================
@@ -43,7 +48,44 @@ interface PushMembersRequest {
 interface PushMembersResponse {
   success: boolean
   upserted: number
+  matched: number
   errors?: string[]
+}
+
+// =============================================
+// Survey Email/Phone Extraction
+// =============================================
+
+function extractEmailFromSurvey(qa: Record<string, string>[] | null): string | null {
+  if (!qa || !Array.isArray(qa)) return null
+
+  for (const item of qa) {
+    const answer = item.answer || ''
+    // Check if the answer looks like an email
+    if (answer.includes('@') && answer.includes('.')) {
+      const emailMatch = answer.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/)
+      if (emailMatch) return emailMatch[0].toLowerCase()
+    }
+  }
+  return null
+}
+
+function extractPhoneFromSurvey(qa: Record<string, string>[] | null): string | null {
+  if (!qa || !Array.isArray(qa)) return null
+
+  for (const item of qa) {
+    const question = (item.question || '').toLowerCase()
+    const answer = item.answer || ''
+
+    // Check if question mentions phone/cell/mobile
+    if (question.includes('phone') || question.includes('cell') || question.includes('mobile') || question.includes('whatsapp')) {
+      const digits = answer.replace(/\D/g, '')
+      if (digits.length >= 10) {
+        return digits.length === 10 ? `+1${digits}` : `+${digits}`
+      }
+    }
+  }
+  return null
 }
 
 // =============================================
@@ -84,14 +126,23 @@ export async function POST(request: NextRequest) {
     let upserted = 0
     const errors: string[] = []
 
+    // Track members that need auto-matching (have survey email, no ghl_contact_id)
+    const needsMatching: Array<{ skoolUserId: string; email: string; displayName: string; username: string }> = []
+
     // Upsert members in batches
     for (const member of members) {
       try {
+        // Extract email/phone from survey answers if not already provided
+        const surveyEmail = extractEmailFromSurvey(member.questionsAndAnswers ?? null)
+        const surveyPhone = extractPhoneFromSurvey(member.questionsAndAnswers ?? null)
+        const effectiveEmail = member.email || surveyEmail || null
+        const effectivePhone = surveyPhone || null
+
         const memberRow: Record<string, unknown> = {
           group_slug: groupId,
           skool_user_id: member.skoolUserId,
           display_name: member.name || null,
-          email: member.email || null,
+          email: effectiveEmail,
           profile_image: member.avatarUrl || null,
           level: member.level ?? null,
           points: member.points ?? null,
@@ -104,6 +155,8 @@ export async function POST(request: NextRequest) {
         if (member.bio) memberRow.bio = member.bio
         if (member.location) memberRow.location = member.location
         if (member.role) memberRow.role = member.role
+        if (member.questionsAndAnswers) memberRow.survey_answers = member.questionsAndAnswers
+        if (effectivePhone) memberRow.phone = effectivePhone
 
         const { error } = await supabase
           .from('skool_members')
@@ -116,6 +169,16 @@ export async function POST(request: NextRequest) {
           errors.push(`Member ${member.skoolUserId}: ${error.message}`)
         } else {
           upserted++
+
+          // Queue for auto-matching if we have an email
+          if (effectiveEmail) {
+            needsMatching.push({
+              skoolUserId: member.skoolUserId,
+              email: effectiveEmail,
+              displayName: member.name || '',
+              username: member.username || member.name || '',
+            })
+          }
         }
       } catch (memberError) {
         console.error(`[Extension API] Exception processing member ${member.skoolUserId}:`, memberError)
@@ -126,12 +189,96 @@ export async function POST(request: NextRequest) {
     }
 
     console.log(
-      `[Extension API] Members complete: upserted=${upserted}, errors=${errors.length}`
+      `[Extension API] Members upserted: ${upserted}, errors: ${errors.length}, candidates for matching: ${needsMatching.length}`
+    )
+
+    // =========================================================================
+    // Auto-match unmatched members against GHL by email
+    // =========================================================================
+
+    let matched = 0
+
+    if (needsMatching.length > 0) {
+      // Find which of these members are still unmatched
+      const candidateIds = needsMatching.map((m) => m.skoolUserId)
+      const { data: unmatched } = await supabase
+        .from('skool_members')
+        .select('skool_user_id')
+        .in('skool_user_id', candidateIds)
+        .is('ghl_contact_id', null)
+
+      const unmatchedIds = new Set(unmatched?.map((m) => m.skool_user_id) || [])
+      const toMatch = needsMatching.filter((m) => unmatchedIds.has(m.skoolUserId))
+
+      if (toMatch.length > 0) {
+        console.log(`[Extension API] Auto-matching ${toMatch.length} unmatched members by email...`)
+
+        try {
+          const ghl = new GHLClient()
+          const MAX_MATCHES_PER_PUSH = 25
+
+          for (const member of toMatch.slice(0, MAX_MATCHES_PER_PUSH)) {
+            try {
+              const contact = await ghl.searchContactByEmail(member.email)
+
+              if (contact) {
+                // Update skool_members with the match
+                await supabase
+                  .from('skool_members')
+                  .update({
+                    ghl_contact_id: contact.id,
+                    matched_at: new Date().toISOString(),
+                    match_method: 'email',
+                  })
+                  .eq('skool_user_id', member.skoolUserId)
+
+                // Also upsert into dm_contact_mappings so it shows in the contacts UI
+                const clerkUserId = authResult.userId || authResult.skoolUserId || staffSkoolId
+                await supabase
+                  .from('dm_contact_mappings')
+                  .upsert({
+                    clerk_user_id: clerkUserId,
+                    skool_user_id: member.skoolUserId,
+                    skool_username: member.username,
+                    skool_display_name: member.displayName,
+                    ghl_contact_id: contact.id,
+                    match_method: 'email',
+                    email: member.email,
+                    contact_type: 'community_member',
+                    updated_at: new Date().toISOString(),
+                  }, {
+                    onConflict: 'clerk_user_id,skool_user_id',
+                    ignoreDuplicates: false,
+                  })
+
+                matched++
+                console.log(`[Extension API] Matched ${member.email} → GHL ${contact.id}`)
+              }
+
+              // Rate limit: 200ms between GHL API calls
+              await new Promise((resolve) => setTimeout(resolve, 200))
+            } catch (matchError) {
+              console.error(`[Extension API] Match error for ${member.email}:`, matchError)
+            }
+          }
+
+          if (toMatch.length > MAX_MATCHES_PER_PUSH) {
+            console.log(`[Extension API] ${toMatch.length - MAX_MATCHES_PER_PUSH} more unmatched members will be processed on next sync`)
+          }
+        } catch (ghlError) {
+          console.error('[Extension API] GHL client error (auto-match skipped):', ghlError)
+        }
+      }
+    }
+
+    console.log(
+      `[Extension API] Complete: upserted=${upserted}, matched=${matched}, errors=${errors.length}`
     )
 
     const response: PushMembersResponse = {
       success: errors.length === 0,
       upserted,
+      matched,
       ...(errors.length > 0 && { errors }),
     }
 
@@ -142,6 +289,7 @@ export async function POST(request: NextRequest) {
       {
         success: false,
         upserted: 0,
+        matched: 0,
         errors: [error instanceof Error ? error.message : 'Unknown error'],
       } as PushMembersResponse,
       { status: 500, headers: corsHeaders }

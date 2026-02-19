@@ -34,6 +34,7 @@ export interface ContactActivity {
     failed_count: number
     last_activity_at: string | null
   }
+  survey_answers: Array<{ question: string; answer: string }> | null
   ghl_location_id: string
   skool_community_slug: string
 }

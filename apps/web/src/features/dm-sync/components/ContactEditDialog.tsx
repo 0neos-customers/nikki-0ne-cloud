@@ -151,6 +151,21 @@ export function ContactEditDialog({
             </div>
           )}
 
+          {/* Survey Answers */}
+          {contact.survey_answers && contact.survey_answers.length > 0 && (
+            <div className="grid gap-2">
+              <label className="text-sm font-medium text-muted-foreground">Survey Answers</label>
+              <div className="rounded-md border bg-muted/30 p-3 space-y-2">
+                {contact.survey_answers.map((qa, i) => (
+                  <div key={i}>
+                    <p className="text-xs font-medium text-muted-foreground">{qa.question}</p>
+                    <p className="text-sm">{qa.answer || '—'}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* GHL Contact ID — always editable */}
           <div className="grid gap-2">
             <label htmlFor="ghl-id" className="text-sm font-medium">
