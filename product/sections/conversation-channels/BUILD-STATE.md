@@ -2,7 +2,7 @@
 
 > Multi-staff DM resolution: resolve placeholder channel IDs before sending outbound messages
 
-## Status: 🔄 Active
+## Status: ✅ Complete
 
 **Created:** 2026-02-18
 
@@ -28,28 +28,28 @@ Cache resolved Skool channel IDs per staff+user pair. Extension resolves placeho
 - [x] Update root BUILD-STATE.md
 
 ### Phase 1: Database Schema Migration
-- [ ] SQL migration `037-contact-channels.sql` — `contact_channels` table + `skool_community_id` column
-- [ ] TypeScript type updates in `features/dm-sync/types.ts`
+- [x]SQL migration `037-contact-channels.sql` — `contact_channels` table + `skool_community_id` column
+- [x]TypeScript type updates in `features/dm-sync/types.ts`
 
 ### Phase 3: Server API Changes (before Phase 2)
-- [ ] `POST /api/extension/push-channel` — cache resolved channel IDs
-- [ ] Update `GET /api/extension/get-pending` — enrich with `skool_community_id`, check cached channels
-- [ ] Update `POST /api/extension/confirm-sent` — accept `resolvedChannelId`
-- [ ] Update `GET /api/dm-sync/contacts` — join `contact_channels` for channel status
+- [x]`POST /api/extension/push-channel` — cache resolved channel IDs
+- [x]Update `GET /api/extension/get-pending` — enrich with `skool_community_id`, check cached channels
+- [x]Update `POST /api/extension/confirm-sent` — accept `resolvedChannelId`
+- [x]Update `GET /api/dm-sync/contacts` — join `contact_channels` for channel status
 
 ### Phase 2: Extension Channel Resolution
-- [ ] New message types: `RESOLVE_CHANNEL`, `RESOLVE_CHANNEL_RESULT`
-- [ ] Main-world handler: `RESOLVE_CHANNEL_VIA_API` → `chat-request` endpoint
-- [ ] DM sender: `resolveChannel()` function
-- [ ] Content script: handle `RESOLVE_CHANNEL` from service worker
-- [ ] Service worker: detect placeholders, resolve before sending, cache via `pushChannel()`
-- [ ] API client: `pushChannel()` function
+- [x]New message types: `RESOLVE_CHANNEL`, `RESOLVE_CHANNEL_RESULT`
+- [x]Main-world handler: `RESOLVE_CHANNEL_VIA_API` → `chat-request` endpoint
+- [x]DM sender: `resolveChannel()` function
+- [x]Content script: handle `RESOLVE_CHANNEL` from service worker
+- [x]Service worker: detect placeholders, resolve before sending, cache via `pushChannel()`
+- [x]API client: `pushChannel()` function
 
 ### Phase 4: Frontend Channel Status
-- [ ] Update `ContactActivity` type with `channels` array
-- [ ] Add Skool DM deep link icon on contacts page
-- [ ] Channel count tooltip for multi-staff contacts
-- [ ] Gray out DM icon for unresolved contacts
+- [x]Update `ContactActivity` type with `channels` array
+- [x]Add Skool DM deep link icon on contacts page
+- [x]Channel count tooltip for multi-staff contacts
+- [x]Gray out DM icon for unresolved contacts
 
 ---
 
