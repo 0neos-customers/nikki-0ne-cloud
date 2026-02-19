@@ -284,25 +284,30 @@ export async function POST(request: NextRequest) {
           }
         }
 
-        // 7. Insert dedup record
-        const { error: sentError } = await supabase
-          .from('dm_hand_raiser_sent')
-          .insert({
-            campaign_id: commenter.campaignId,
-            skool_user_id: commenter.skoolUserId,
-          })
+        // 7. Insert dedup record — only if we have a GHL contact
+        if (contactResult.ghlContactId) {
+          const { error: sentError } = await supabase
+            .from('dm_hand_raiser_sent')
+            .insert({
+              campaign_id: commenter.campaignId,
+              skool_user_id: commenter.skoolUserId,
+            })
 
-        if (sentError) {
-          // Duplicate insert is OK (race condition safety)
-          if (sentError.code !== '23505') {
-            console.error(`[Extension API] Failed to record sent:`, sentError)
-            errors.push(`Dedup record for ${commenter.username}: ${sentError.message}`)
+          if (sentError) {
+            // Duplicate insert is OK (race condition safety)
+            if (sentError.code !== '23505') {
+              console.error(`[Extension API] Failed to record sent:`, sentError)
+              errors.push(`Dedup record for ${commenter.username}: ${sentError.message}`)
+            }
           }
-        }
 
-        // Mark as seen in our local set to prevent duplicates within this batch
-        sentSet.add(dedupKey)
-        processed++
+          sentSet.add(dedupKey)
+          processed++
+        } else {
+          // No GHL contact — skip dedup so they can be retried later
+          console.log(`[Extension API] Skipping dedup for ${commenter.username} - no GHL contact (will retry)`)
+          skipped++
+        }
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error)
         console.error(`[Extension API] Error processing commenter ${commenter.skoolUserId}:`, msg)

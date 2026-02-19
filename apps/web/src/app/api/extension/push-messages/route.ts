@@ -163,6 +163,60 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // =============================================
+    // Contact Discovery: ensure all inbound contacts exist in dm_contact_mappings
+    // =============================================
+    if (clerkUserId) {
+      // Collect unique non-staff inbound senders
+      const inboundSenders = new Map<string, string>() // skool_user_id -> sender_name
+      for (const msg of messages) {
+        if (!msg.isOwnMessage && msg.senderId) {
+          inboundSenders.set(msg.senderId, msg.senderName || '')
+        }
+      }
+
+      if (inboundSenders.size > 0) {
+        const senderIds = [...inboundSenders.keys()]
+
+        // Filter out staff users
+        const { data: staffUsers } = await supabase
+          .from('staff_users')
+          .select('skool_user_id')
+          .in('skool_user_id', senderIds)
+        const staffSet = new Set((staffUsers || []).map(s => s.skool_user_id))
+
+        // Check which already have mappings
+        const { data: existingMappings } = await supabase
+          .from('dm_contact_mappings')
+          .select('skool_user_id')
+          .eq('clerk_user_id', clerkUserId)
+          .in('skool_user_id', senderIds)
+        const mappedSet = new Set((existingMappings || []).map(m => m.skool_user_id))
+
+        // Create entries for unmapped, non-staff contacts
+        for (const [senderId, senderName] of inboundSenders) {
+          if (staffSet.has(senderId) || mappedSet.has(senderId)) continue
+
+          // Check if community member
+          const { data: member } = await supabase
+            .from('skool_members')
+            .select('skool_user_id, display_name, email, ghl_contact_id')
+            .eq('skool_user_id', senderId)
+            .single()
+
+          await supabase.from('dm_contact_mappings').upsert({
+            clerk_user_id: clerkUserId,
+            skool_user_id: senderId,
+            skool_display_name: member?.display_name || senderName || null,
+            ghl_contact_id: member?.ghl_contact_id || null,
+            match_method: member?.ghl_contact_id ? 'skool_members' : null,
+            contact_type: member ? 'community_member' : 'dm_contact',
+            email: member?.email || null,
+          }, { onConflict: 'clerk_user_id,skool_user_id', ignoreDuplicates: true })
+        }
+      }
+    }
+
     console.log(
       `[Extension API] Complete: synced=${synced}, skipped=${skipped}, errors=${errors.length}`
     )

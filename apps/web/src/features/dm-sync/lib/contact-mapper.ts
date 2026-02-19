@@ -98,7 +98,8 @@ export async function findOrCreateGhlContact(
       skoolMember.ghl_contact_id,
       skoolUsername,
       skoolDisplayName,
-      'skool_members'
+      'skool_members',
+      skoolMember?.email
     )
     return {
       ghlContactId: skoolMember.ghl_contact_id,
@@ -125,7 +126,8 @@ export async function findOrCreateGhlContact(
         contact.id,
         skoolUsername,
         skoolDisplayName,
-        'email'
+        'email',
+        email
       )
 
       // Update skool_members if we have a match
@@ -159,7 +161,8 @@ export async function findOrCreateGhlContact(
       contactBySkoolId.id,
       skoolUsername,
       skoolDisplayName,
-      'skool_id'
+      'skool_id',
+      undefined
     )
 
     // Update skool_members
@@ -179,13 +182,29 @@ export async function findOrCreateGhlContact(
     }
   }
 
-  // 5. RARE: Create NEW contact with REAL data (~1% of cases)
-  // Only if we have real email (NOT synthetic)
+  // 5. No email found — create unmatched entry so contact is visible in contacts page
   if (!email) {
     console.log(
-      `[Contact Mapper] Cannot create GHL contact for Skool user ${skoolUserId} - no email found. ` +
-        'This user may not have completed the Skool survey.'
+      `[Contact Mapper] No email for Skool user ${skoolUserId} - creating unmatched entry`
     )
+
+    // Check if this user is a community member
+    const { data: memberCheck } = await supabase
+      .from('skool_members')
+      .select('skool_user_id')
+      .eq('skool_user_id', skoolUserId)
+      .single()
+
+    await supabase.from('dm_contact_mappings').upsert({
+      clerk_user_id: userId,
+      skool_user_id: skoolUserId,
+      skool_username: skoolUsername,
+      skool_display_name: skoolDisplayName,
+      ghl_contact_id: null,
+      match_method: 'no_email',
+      contact_type: memberCheck ? 'community_member' : 'dm_contact',
+    }, { onConflict: 'clerk_user_id,skool_user_id', ignoreDuplicates: false })
+
     return {
       ghlContactId: null,
       matchMethod: 'no_email',
@@ -216,7 +235,8 @@ export async function findOrCreateGhlContact(
     newContactId,
     skoolUsername,
     skoolDisplayName,
-    'created'
+    'created',
+    email
   )
 
   // Update skool_members
@@ -593,9 +613,17 @@ async function cacheMapping(
   ghlContactId: string,
   skoolUsername: string,
   skoolDisplayName: string,
-  matchMethod: MatchMethod
+  matchMethod: MatchMethod,
+  email?: string | null
 ): Promise<void> {
   const supabase = createServerClient()
+
+  // Determine contact type
+  const { data: memberCheck } = await supabase
+    .from('skool_members')
+    .select('skool_user_id')
+    .eq('skool_user_id', skoolUserId)
+    .single()
 
   const mappingRow: Omit<ContactMappingRow, 'id' | 'created_at'> = {
     clerk_user_id: userId,
@@ -611,8 +639,12 @@ async function cacheMapping(
           : matchMethod === 'skool_members'
             ? 'email'
             : matchMethod === 'no_email'
-              ? null // Should never happen - we don't cache when no email
+              ? 'no_email'
               : matchMethod,
+    email: email || null,
+    phone: null,
+    contact_type: memberCheck ? 'community_member' : 'dm_contact',
+    updated_at: new Date().toISOString(),
   }
 
   const { error } = await supabase.from('dm_contact_mappings').upsert(mappingRow, {
@@ -633,7 +665,7 @@ async function cacheMapping(
 /**
  * Parse display name into first and last name
  */
-function parseDisplayName(displayName: string): { firstName: string; lastName: string } {
+export function parseDisplayName(displayName: string): { firstName: string; lastName: string } {
   const parts = displayName.trim().split(/\s+/)
 
   if (parts.length === 0) {

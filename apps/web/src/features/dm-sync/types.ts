@@ -56,7 +56,22 @@ export interface DmSyncConfigRow {
   clerk_user_id: string
   skool_community_slug: string
   ghl_location_id: string
+  skool_community_id: string | null
   enabled: boolean
+  created_at: string
+  updated_at: string
+}
+
+/**
+ * Database row for contact_channels table (per-staff channel cache)
+ */
+export interface ContactChannelRow {
+  id: string
+  clerk_user_id: string
+  skool_user_id: string
+  staff_skool_id: string
+  skool_channel_id: string
+  resolved_at: string
   created_at: string
   updated_at: string
 }
@@ -70,9 +85,13 @@ export interface ContactMappingRow {
   skool_user_id: string
   skool_username: string | null
   skool_display_name: string | null
-  ghl_contact_id: string
-  match_method: 'skool_id' | 'email' | 'name' | 'synthetic' | null
+  ghl_contact_id: string | null
+  match_method: 'skool_id' | 'email' | 'name' | 'synthetic' | 'manual' | 'no_email' | null
+  email: string | null
+  phone: string | null
+  contact_type: 'community_member' | 'dm_contact' | 'unknown' | null
   created_at: string
+  updated_at: string | null
 }
 
 /**
@@ -167,9 +186,13 @@ export interface ContactMapping {
   skoolUserId: string
   skoolUsername: string | null
   skoolDisplayName: string | null
-  ghlContactId: string
-  matchMethod: 'skool_id' | 'email' | 'name' | 'synthetic' | null
+  ghlContactId: string | null
+  matchMethod: 'skool_id' | 'email' | 'name' | 'synthetic' | 'manual' | 'no_email' | null
+  email: string | null
+  phone: string | null
+  contactType: 'community_member' | 'dm_contact' | 'unknown' | null
   createdAt: Date
+  updatedAt: Date | null
 }
 
 /**
@@ -276,7 +299,7 @@ export interface SendResult {
 export interface MapContactResult {
   success: boolean
   mapping?: ContactMapping
-  matchMethod?: 'skool_id' | 'email' | 'name' | 'synthetic'
+  matchMethod?: 'skool_id' | 'email' | 'name' | 'synthetic' | 'manual'
   error?: string
 }
 

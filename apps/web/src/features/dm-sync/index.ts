@@ -65,6 +65,7 @@ export {
   isSyntheticEmail,
   normalizeName,
   calculateNameSimilarity,
+  parseDisplayName,
   // New exports for Phase 3
   findOrCreateGhlContact,
   findGhlContactsForUsers,
@@ -178,6 +179,11 @@ export {
   type UseConversationDetailReturn,
 } from './hooks/use-conversation-detail'
 
+export {
+  useManualMatch,
+  useSyntheticCreate,
+} from './hooks/use-contact-mutations'
+
 // =============================================================================
 // STAFF USERS (Phase 5)
 // =============================================================================
@@ -213,3 +219,4 @@ export { ConversationList } from './components/ConversationList'
 export { ConversationItem } from './components/ConversationItem'
 export { ConversationDetail } from './components/ConversationDetail'
 export { MessageBubble } from './components/MessageBubble'
+export { ContactEditDialog } from './components/ContactEditDialog'

@@ -13,6 +13,7 @@ export const dynamic = 'force-dynamic'
 interface ConfirmSentRequest {
   messageId: string
   skoolMessageId?: string // The message ID from Skool after sending
+  resolvedChannelId?: string // Real channel ID if resolved from placeholder
   success: boolean
   error?: string
 }
@@ -76,6 +77,8 @@ export async function POST(request: NextRequest) {
           synced_at: new Date().toISOString(),
           // Update skool_message_id if provided (message sent successfully to Skool)
           ...(body.skoolMessageId && { skool_message_id: body.skoolMessageId }),
+          // Update skool_conversation_id if resolved from placeholder
+          ...(body.resolvedChannelId && { skool_conversation_id: body.resolvedChannelId }),
         })
         .eq('id', body.messageId)
 

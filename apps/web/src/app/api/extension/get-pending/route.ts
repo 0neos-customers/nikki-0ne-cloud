@@ -19,12 +19,15 @@ interface PendingMessage {
   // Phase 5: Multi-staff support
   staff_skool_id: string | null
   staff_display_name: string | null
+  // Channel resolution support
+  skool_community_id: string | null
 }
 
 interface GetPendingResponse {
   success: boolean
   messages: PendingMessage[]
   count: number
+  skool_community_id: string | null
 }
 
 // =============================================
@@ -36,6 +39,10 @@ interface GetPendingResponse {
  *
  * Returns messages that need to be sent via the Chrome extension.
  * These are messages created from GHL that need to be delivered to Skool.
+ *
+ * Enrichments:
+ * - Includes skool_community_id from dm_sync_config for channel resolution
+ * - Checks contact_channels for pre-resolved channels and substitutes placeholders
  *
  * Query params:
  * - staffSkoolId: The staff member's Skool user ID
@@ -84,16 +91,16 @@ export async function GET(request: NextRequest) {
     console.log(`[Extension API] Sample pending messages:`, JSON.stringify(samplePending))
     console.log(`[Extension API] Looking for staffSkoolId: ${staffSkoolId}`)
 
+    // Fetch skool_community_id from dm_sync_config
+    const { data: syncConfig } = await supabase
+      .from('dm_sync_config')
+      .select('skool_community_id')
+      .limit(1)
+      .single()
+
+    const skoolCommunityId = syncConfig?.skool_community_id || null
+
     // Query for pending outbound messages
-    // These are messages that:
-    // 1. Belong to this staff member (staff_skool_id = staffSkoolId)
-    // 2. Are outbound (direction = 'outbound')
-    // 3. Are pending (status = 'pending')
-    // 4. Have a valid source: GHL (ghl_message_id), hand-raiser, or manual (inbox)
-    //
-    // Phase 5: Also filter by staff_skool_id for multi-staff routing
-    // Messages can be routed to specific staff via staff_skool_id field
-    // Get current time minus 24 hours for GHL message filter
     const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
 
     const { data: pendingMessages, error } = await supabase
@@ -102,8 +109,6 @@ export async function GET(request: NextRequest) {
       .eq('staff_skool_id', staffSkoolId)
       .eq('direction', 'outbound')
       .eq('status', 'pending')
-      // Allow both manual (inbox) and ghl messages
-      // GHL messages are filtered to last 24 hours to avoid sending old backfill data
       .or(`source.eq.manual,source.eq.hand-raiser,and(source.eq.ghl,created_at.gte.${oneDayAgo})`)
       .order('created_at', { ascending: true })
       .limit(limit)
@@ -116,7 +121,41 @@ export async function GET(request: NextRequest) {
       )
     }
 
-    const messages = pendingMessages || []
+    let messages: PendingMessage[] = (pendingMessages || []).map((msg) => ({
+      ...msg,
+      skool_community_id: skoolCommunityId,
+    }))
+
+    // Check contact_channels for pre-resolved channels and substitute placeholders
+    const placeholderMessages = messages.filter(
+      (m) => m.skool_conversation_id.startsWith('hr-pending-') || m.skool_conversation_id.startsWith('pending-')
+    )
+
+    if (placeholderMessages.length > 0) {
+      const skoolUserIds = [...new Set(placeholderMessages.map((m) => m.skool_user_id))]
+
+      const { data: cachedChannels } = await supabase
+        .from('contact_channels')
+        .select('skool_user_id, skool_channel_id')
+        .eq('staff_skool_id', staffSkoolId)
+        .in('skool_user_id', skoolUserIds)
+
+      if (cachedChannels && cachedChannels.length > 0) {
+        const channelMap = new Map(cachedChannels.map((c) => [c.skool_user_id, c.skool_channel_id]))
+
+        messages = messages.map((msg) => {
+          if (
+            (msg.skool_conversation_id.startsWith('hr-pending-') || msg.skool_conversation_id.startsWith('pending-')) &&
+            channelMap.has(msg.skool_user_id)
+          ) {
+            return { ...msg, skool_conversation_id: channelMap.get(msg.skool_user_id)! }
+          }
+          return msg
+        })
+
+        console.log(`[Extension API] Substituted ${cachedChannels.length} cached channels for placeholders`)
+      }
+    }
 
     console.log(`[Extension API] Found ${messages.length} pending outbound messages`)
 
@@ -124,6 +163,7 @@ export async function GET(request: NextRequest) {
       success: true,
       messages,
       count: messages.length,
+      skool_community_id: skoolCommunityId,
     }
 
     return NextResponse.json(response, { headers: corsHeaders })
@@ -134,6 +174,7 @@ export async function GET(request: NextRequest) {
         success: false,
         messages: [],
         count: 0,
+        skool_community_id: null,
         error: error instanceof Error ? error.message : 'Unknown error',
       },
       { status: 500, headers: corsHeaders }
