@@ -103,6 +103,7 @@ export async function POST(request: NextRequest) {
       mappings_updated: 0,
       ghl_matched: 0,
       names_cleaned: 0,
+      usernames_cleaned: 0,
     }
 
     // =========================================================================
@@ -235,6 +236,35 @@ export async function POST(request: NextRequest) {
     }
 
     console.log(`[Backfill] Cleaned ${stats.names_cleaned} garbage display names`)
+
+    // =========================================================================
+    // Step 2c: Clean up garbage skool_username values in dm_contact_mappings
+    // Garbage = contains URLs, commas, is >50 chars
+    // Set to null (no good fallback for username — it should be a slug)
+    // =========================================================================
+
+    for (const mapping of allMappingsForCleanup) {
+      const username = mapping.skool_username
+      if (!username) continue
+
+      const isGarbageUsername = username.length > 50 ||
+        username.includes('http') ||
+        username.includes(',') ||
+        username.includes('assets.skool.com')
+
+      if (isGarbageUsername) {
+        await supabase
+          .from('dm_contact_mappings')
+          .update({
+            skool_username: null,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('skool_user_id', mapping.skool_user_id)
+        stats.usernames_cleaned++
+      }
+    }
+
+    console.log(`[Backfill] Cleaned ${stats.usernames_cleaned} garbage usernames`)
 
     // =========================================================================
     // Step 3: Auto-match unmatched members with email against GHL
