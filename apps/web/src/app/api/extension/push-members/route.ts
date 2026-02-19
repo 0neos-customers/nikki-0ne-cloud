@@ -193,6 +193,37 @@ export async function POST(request: NextRequest) {
     )
 
     // =========================================================================
+    // Sync emails/phones to dm_contact_mappings (so they show in the UI)
+    // =========================================================================
+
+    if (needsMatching.length > 0) {
+      const emailSyncIds = needsMatching.map((m) => m.skoolUserId)
+      const { data: existingMappings } = await supabase
+        .from('dm_contact_mappings')
+        .select('skool_user_id, email, phone')
+        .in('skool_user_id', emailSyncIds)
+
+      if (existingMappings) {
+        for (const mapping of existingMappings) {
+          const memberInfo = needsMatching.find((m) => m.skoolUserId === mapping.skool_user_id)
+          if (!memberInfo) continue
+
+          const updates: Record<string, unknown> = {}
+          if (memberInfo.email && !mapping.email) {
+            updates.email = memberInfo.email
+          }
+          if (Object.keys(updates).length > 0) {
+            updates.updated_at = new Date().toISOString()
+            await supabase
+              .from('dm_contact_mappings')
+              .update(updates)
+              .eq('skool_user_id', mapping.skool_user_id)
+          }
+        }
+      }
+    }
+
+    // =========================================================================
     // Auto-match unmatched members against GHL by email
     // =========================================================================
 
