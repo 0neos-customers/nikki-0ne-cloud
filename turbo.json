@@ -13,7 +13,11 @@
         "META_ACCESS_TOKEN",
         "META_AD_ACCOUNT_ID",
         "DATABASE_URL",
-        "EXTERNAL_API_KEY"
+        "EXTERNAL_API_KEY",
+        "PLAID_CLIENT_ID",
+        "PLAID_SECRET",
+        "PLAID_ENV",
+        "PLAID_ENCRYPTION_KEY"
       ]
     },
     "dev": {

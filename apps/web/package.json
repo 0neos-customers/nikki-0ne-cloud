@@ -21,7 +21,7 @@
     "plaid": "^28.0.0",
     "react": "19.2.3",
     "react-dom": "19.2.3",
-    "react-plaid-link": "^3.6.0",
+    "react-plaid-link": "^4.1.1",
     "recharts": "^3.7.0",
     "swr": "^2.4.0",
     "zustand": "^5.0.0"
