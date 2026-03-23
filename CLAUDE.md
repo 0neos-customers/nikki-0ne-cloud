@@ -16,6 +16,20 @@ This nimble hub shows what's active and points to the right feature BUILD-STATE.
 
 ---
 
+## DO NOT TOUCH: Favicon / Icon (CRITICAL)
+
+The favicon is `src/app/icon.svg` — an italic serif "O" in Monarch orange (#FF692D). It is referenced in `layout.tsx` metadata as `{ url: "/icon.svg", type: "image/svg+xml" }`.
+
+**NEVER:**
+- Replace, regenerate, or convert it to .ico/.png
+- Remove or change the `icon` entry in layout.tsx metadata
+- Create a new favicon.ico in public/
+- "Fix" a "missing favicon" — it is NOT missing
+
+This has been broken 15+ times by well-meaning build sessions. If you think the favicon is missing, you are wrong. Read `src/app/icon.svg` and `src/app/layout.tsx` to confirm.
+
+---
+
 ## Build Protocol (CRITICAL)
 
 ### Multi-Agent Sequential Deployment
