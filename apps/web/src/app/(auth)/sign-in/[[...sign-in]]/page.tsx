@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { Button, Input, Label } from '@0ne/ui'
 import { Loader2, AlertCircle } from 'lucide-react'
+import { OAuthButtons } from '../../_components/oauth-buttons'
 
 export default function SignInPage() {
   const { isLoaded, signIn, setActive } = useSignIn()
@@ -57,6 +58,17 @@ export default function SignInPage() {
         </div>
       )}
 
+      <OAuthButtons mode="sign-in" />
+
+      <div className="relative">
+        <div className="absolute inset-0 flex items-center">
+          <div className="w-full border-t" />
+        </div>
+        <div className="relative flex justify-center text-xs uppercase">
+          <span className="bg-background px-2 text-muted-foreground">or continue with email</span>
+        </div>
+      </div>
+
       <form onSubmit={handleSubmit} className="space-y-4">
         <div className="space-y-2">
           <Label htmlFor="email">Email</Label>
@@ -90,7 +102,7 @@ export default function SignInPage() {
       </form>
 
       <p className="text-center text-sm text-muted-foreground">
-        Don't have an account?{' '}
+        Don&apos;t have an account?{' '}
         <Link href="/sign-up" className="text-primary hover:underline font-medium">
           Sign up
         </Link>

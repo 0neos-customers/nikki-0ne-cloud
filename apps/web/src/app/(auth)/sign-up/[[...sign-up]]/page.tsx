@@ -6,6 +6,7 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { Button, Input, Label } from '@0ne/ui'
 import { Loader2, AlertCircle, CheckCircle2 } from 'lucide-react'
+import { OAuthButtons } from '../../_components/oauth-buttons'
 
 export default function SignUpPage() {
   const { isLoaded, signUp, setActive } = useSignUp()
@@ -183,6 +184,17 @@ export default function SignUpPage() {
           {error}
         </div>
       )}
+
+      <OAuthButtons mode="sign-up" />
+
+      <div className="relative">
+        <div className="absolute inset-0 flex items-center">
+          <div className="w-full border-t" />
+        </div>
+        <div className="relative flex justify-center text-xs uppercase">
+          <span className="bg-background px-2 text-muted-foreground">or continue with email</span>
+        </div>
+      </div>
 
       <form onSubmit={handleSubmit} className="space-y-4">
         <div className="grid grid-cols-2 gap-4">
