@@ -54,6 +54,7 @@ interface TelemetryRequest {
   bun_version?: string
   one_version?: string
   principal_name?: string
+  install_token?: string
   results: unknown
   fix_actions?: FixAction[]
   summary?: Record<string, unknown>
@@ -191,6 +192,20 @@ export async function POST(request: NextRequest) {
             }
           : null)
 
+    // Resolve cloud user from install token if provided
+    let cloudUserId: string | null = null
+    if (body.install_token) {
+      const { data: installRecord } = await supabase
+        .from('user_installs')
+        .select('clerk_user_id')
+        .eq('install_token', body.install_token)
+        .single()
+
+      if (installRecord) {
+        cloudUserId = installRecord.clerk_user_id
+      }
+    }
+
     const row = {
       event_type: body.event_type,
       platform: body.platform || null,
@@ -199,6 +214,8 @@ export async function POST(request: NextRequest) {
       bun_version: body.bun_version || null,
       one_version: body.one_version || null,
       principal_name: body.principal_name || null,
+      cloud_user_id: cloudUserId,
+      install_token: body.install_token || null,
       results: body.results,
       summary: body.summary || null,
       system_info: body.system_info || null,
@@ -218,6 +235,32 @@ export async function POST(request: NextRequest) {
         { success: false, error: error.message },
         { status: 500, headers: corsHeaders }
       )
+    }
+
+    // =============================================
+    // Link install to cloud user
+    // =============================================
+
+    if (body.install_token && cloudUserId) {
+      const isDoctor = body.event_type === 'doctor'
+      const doctorPassed = isDoctor && body.summary &&
+        (body.summary as Record<string, number>).fail === 0
+
+      await supabase
+        .from('user_installs')
+        .update({
+          status: doctorPassed ? 'verified' : 'connected',
+          platform: body.platform || null,
+          arch: body.arch || null,
+          os_version: body.os_version || null,
+          bun_version: body.bun_version || null,
+          one_version: body.one_version || null,
+          principal_name: body.principal_name || null,
+          connected_at: new Date().toISOString(),
+          ...(doctorPassed ? { verified_at: new Date().toISOString() } : {}),
+          updated_at: new Date().toISOString(),
+        })
+        .eq('install_token', body.install_token)
     }
 
     // =============================================

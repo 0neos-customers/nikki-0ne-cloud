@@ -33,10 +33,18 @@ export default async function HomePage() {
       </div>
 
       {enabledAppIds.length === 0 && (
-        <div className="text-center py-12">
-          <p className="text-muted-foreground">
-            No apps are enabled for your account. Contact an administrator to
-            request access.
+        <div className="text-center py-12 space-y-3">
+          <div className="flex justify-center">
+            <div className="flex h-16 w-16 items-center justify-center rounded-full bg-primary/10">
+              <svg className="h-8 w-8 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+            </div>
+          </div>
+          <h3 className="text-lg font-semibold">Your 0ne is connected!</h3>
+          <p className="text-muted-foreground max-w-sm mx-auto">
+            Your account is set up. Your administrator will enable apps for
+            your dashboard soon.
           </p>
         </div>
       )}

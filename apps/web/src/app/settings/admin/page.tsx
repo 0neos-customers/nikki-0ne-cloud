@@ -16,7 +16,7 @@ import {
   TableHeader,
   TableRow,
 } from '@0ne/ui'
-import { Search, Shield, Users, RefreshCw, Loader2 } from 'lucide-react'
+import { Search, Shield, Users, RefreshCw, Loader2, Mail, Copy, Check, Ban } from 'lucide-react'
 import { AppShell } from '@/components/shell'
 import { APPS, type AppId } from '@/lib/apps'
 
@@ -32,12 +32,80 @@ interface User {
   }
 }
 
+interface Invite {
+  id: string
+  email: string
+  name: string | null
+  token: string
+  status: 'pending' | 'accepted' | 'expired' | 'revoked'
+  created_at: string
+}
+
 export default function AdminPermissionsPage() {
   const [users, setUsers] = useState<User[]>([])
   const [loading, setLoading] = useState(true)
   const [searchQuery, setSearchQuery] = useState('')
   const [saving, setSaving] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [invites, setInvites] = useState<Invite[]>([])
+  const [inviteEmail, setInviteEmail] = useState('')
+  const [inviteName, setInviteName] = useState('')
+  const [inviteLoading, setInviteLoading] = useState(false)
+  const [invitesLoading, setInvitesLoading] = useState(true)
+  const [copied, setCopied] = useState<string | null>(null)
+
+  const fetchInvites = async () => {
+    setInvitesLoading(true)
+    try {
+      const response = await fetch('/api/admin/invites')
+      if (!response.ok) throw new Error('Failed to fetch invites')
+      const data = await response.json()
+      setInvites(data.invites || [])
+    } catch (err) {
+      console.error('Failed to load invites:', err)
+    } finally {
+      setInvitesLoading(false)
+    }
+  }
+
+  const createInvite = async () => {
+    if (!inviteEmail.trim()) return
+    setInviteLoading(true)
+    try {
+      const response = await fetch('/api/admin/invites', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: inviteEmail, name: inviteName }),
+      })
+      if (!response.ok) throw new Error('Failed to create invite')
+      setInviteEmail('')
+      setInviteName('')
+      await fetchInvites()
+    } catch (err) {
+      console.error('Failed to create invite:', err)
+    } finally {
+      setInviteLoading(false)
+    }
+  }
+
+  const revokeInvite = async (id: string) => {
+    try {
+      const response = await fetch(`/api/admin/invites/${id}`, {
+        method: 'DELETE',
+      })
+      if (!response.ok) throw new Error('Failed to revoke invite')
+      await fetchInvites()
+    } catch (err) {
+      console.error('Failed to revoke invite:', err)
+    }
+  }
+
+  const copyInviteLink = (token: string, inviteId: string) => {
+    const link = `${window.location.origin}/sign-up?invite=${token}`
+    navigator.clipboard.writeText(link)
+    setCopied(inviteId)
+    setTimeout(() => setCopied(null), 2000)
+  }
 
   const fetchUsers = async () => {
     setLoading(true)
@@ -58,6 +126,7 @@ export default function AdminPermissionsPage() {
 
   useEffect(() => {
     fetchUsers()
+    fetchInvites()
   }, [])
 
   const filteredUsers = users.filter(
@@ -198,6 +267,132 @@ export default function AdminPermissionsPage() {
             Manage which apps each user can access
           </p>
         </div>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Mail className="h-5 w-5" />
+              Invites
+            </CardTitle>
+            <CardDescription>
+              Create and manage user invites
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault()
+                createInvite()
+              }}
+              className="mb-4 flex items-center gap-2"
+            >
+              <Input
+                placeholder="Email address"
+                type="email"
+                value={inviteEmail}
+                onChange={(e) => setInviteEmail(e.target.value)}
+                className="flex-1"
+                required
+              />
+              <Input
+                placeholder="Name (optional)"
+                value={inviteName}
+                onChange={(e) => setInviteName(e.target.value)}
+                className="flex-1"
+              />
+              <Button type="submit" disabled={inviteLoading || !inviteEmail.trim()}>
+                {inviteLoading ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <Mail className="mr-2 h-4 w-4" />
+                )}
+                Send Invite
+              </Button>
+            </form>
+
+            {invitesLoading ? (
+              <div className="flex h-32 items-center justify-center">
+                <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+              </div>
+            ) : (
+              <div className="rounded-md border">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Email</TableHead>
+                      <TableHead>Name</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Created</TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {invites.map((invite) => (
+                      <TableRow key={invite.id}>
+                        <TableCell className="font-medium">{invite.email}</TableCell>
+                        <TableCell>{invite.name || '—'}</TableCell>
+                        <TableCell>
+                          <span
+                            className={`inline-flex items-center rounded-full px-2 py-1 text-xs font-medium ${
+                              invite.status === 'pending'
+                                ? 'bg-orange-100 text-orange-700'
+                                : invite.status === 'accepted'
+                                  ? 'bg-green-100 text-green-700'
+                                  : invite.status === 'expired'
+                                    ? 'bg-gray-100 text-gray-600'
+                                    : 'bg-red-100 text-red-700'
+                            }`}
+                          >
+                            {invite.status}
+                          </span>
+                        </TableCell>
+                        <TableCell className="text-muted-foreground">
+                          {new Date(invite.created_at).toLocaleDateString()}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <div className="flex items-center justify-end gap-1">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => copyInviteLink(invite.token, invite.id)}
+                              title="Copy invite link"
+                            >
+                              {copied === invite.id ? (
+                                <Check className="h-4 w-4 text-green-600" />
+                              ) : (
+                                <Copy className="h-4 w-4" />
+                              )}
+                            </Button>
+                            {invite.status === 'pending' && (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => revokeInvite(invite.id)}
+                                title="Revoke invite"
+                              >
+                                <Ban className="h-4 w-4 text-red-500" />
+                              </Button>
+                            )}
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                    {invites.length === 0 && (
+                      <TableRow>
+                        <TableCell
+                          colSpan={5}
+                          className="h-24 text-center text-muted-foreground"
+                        >
+                          No invites yet
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+          </CardContent>
+        </Card>
 
         <Card>
           <CardHeader>

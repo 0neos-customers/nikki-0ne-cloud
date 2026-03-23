@@ -19,6 +19,7 @@ function handleDomainRedirect(request: NextRequest): NextResponse | null {
 const isPublicRoute = createRouteMatcher([
   '/sign-in(.*)',
   '/sign-up(.*)',
+  '/request-access',
   '/embed(.*)',
   '/privacy',
   '/security-policy',
@@ -30,6 +31,7 @@ const isPublicRoute = createRouteMatcher([
   '/api/auth(.*)', // OAuth callbacks
   '/api/webhooks(.*)', // Webhooks from external services
   '/api/widget(.*)', // Widget API uses its own token auth
+  '/api/admin/invites/validate', // Invite validation (pre-auth)
 ])
 
 const appRoutes: Record<string, AppId> = {
@@ -51,7 +53,22 @@ export default clerkMiddleware(async (auth, request) => {
     return NextResponse.next()
   }
 
-  const { userId } = await auth.protect()
+  const { userId, sessionClaims } = await auth.protect()
+
+  // Onboarding redirect: if user hasn't completed onboarding, send them there
+  const skipOnboardingCheck =
+    pathname.startsWith('/api/') ||
+    pathname.startsWith('/onboarding') ||
+    pathname.startsWith('/sign-out')
+
+  if (!skipOnboardingCheck) {
+    const metadata = sessionClaims?.metadata as { onboardingComplete?: boolean; permissions?: { isAdmin?: boolean } } | undefined
+    const isAdmin = metadata?.permissions?.isAdmin === true
+    // Admins without onboardingComplete are treated as complete (existing users)
+    if (!metadata?.onboardingComplete && !isAdmin) {
+      return NextResponse.redirect(new URL('/onboarding', request.url))
+    }
+  }
 
   for (const [route, appId] of Object.entries(appRoutes)) {
     if (pathname.startsWith(route)) {
