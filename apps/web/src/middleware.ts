@@ -2,23 +2,8 @@ import { clerkMiddleware, createRouteMatcher } from '@clerk/nextjs/server'
 import { NextRequest, NextResponse } from 'next/server'
 import { canAccessApp, type AppId } from '@0ne/auth/permissions'
 
-// Marketing site paths served on root domains
+// Marketing site paths served on the canonical root domain
 const MARKETING_PATHS = ['/', '/install', '/diy-install', '/download', '/privacy']
-
-// Domains that serve the marketing site (root domain, not app subdomain)
-const MARKETING_DOMAINS = [
-  '0neos.com', 'www.0neos.com',
-  'project1.ai', 'www.project1.ai',
-  'install0ne.com', 'www.install0ne.com',
-]
-
-// Domains that redirect to the canonical root domain
-const REDIRECT_TO_ROOT_DOMAINS = [
-  'project0ne.ai', 'www.project0ne.ai', 'app.project0ne.ai',
-  'project0ne.com', 'www.project0ne.com',
-  '0necloud.com', 'www.0necloud.com',
-  '0nesync.com', 'www.0nesync.com',
-]
 
 function handleDomainRouting(request: NextRequest): NextResponse | null {
   const hostname = request.headers.get('host') || ''
@@ -29,15 +14,14 @@ function handleDomainRouting(request: NextRequest): NextResponse | null {
     return null
   }
 
-  // Marketing domains — rewrite to /site/* internally
-  if (MARKETING_DOMAINS.includes(hostname)) {
+  // 0neos.com — canonical marketing domain
+  if (hostname === '0neos.com' || hostname === 'www.0neos.com') {
     // API routes pass through (download API, etc.)
     if (pathname.startsWith('/api/')) {
       return NextResponse.next()
     }
     // Marketing paths get rewritten to /site/*
     if (MARKETING_PATHS.includes(pathname) || pathname.startsWith('/site')) {
-      // Don't double-rewrite if already on /site
       if (pathname.startsWith('/site')) {
         return NextResponse.next()
       }
@@ -51,11 +35,12 @@ function handleDomainRouting(request: NextRequest): NextResponse | null {
     return NextResponse.redirect(url, 307)
   }
 
-  // Other 0ne domains → redirect to 0neos.com
-  if (REDIRECT_TO_ROOT_DOMAINS.includes(hostname)) {
+  // ALL other domains → 301 permanent redirect to 0neos.com
+  if (hostname !== 'localhost' && hostname !== 'localhost:3000') {
     const url = request.nextUrl.clone()
     url.host = '0neos.com'
-    return NextResponse.redirect(url, 307)
+    url.port = ''
+    return NextResponse.redirect(url, 301)
   }
 
   return null
