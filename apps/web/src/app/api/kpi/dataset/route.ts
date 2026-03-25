@@ -126,7 +126,7 @@ export async function GET(request: Request) {
     // Calculate stage counts from contacts' stages arrays (tags accumulate)
     const stageCountsMap: Record<string, number> = {}
     const contactsData = contactStageCountsData
-    contactsData.forEach((contact) => {
+    contactsData.forEach((contact: { stages: unknown }) => {
       const stages = (contact.stages as string[]) || []
       stages.forEach((stage) => {
         if (stage) {
@@ -136,7 +136,7 @@ export async function GET(request: Request) {
     })
 
     // Build dimension stages with live counts
-    const dimensionStagesWithCounts = dimensionStagesData.map((stage) => ({
+    const dimensionStagesWithCounts = dimensionStagesData.map((stage: typeof dimensionStagesData[number]) => ({
       ...stage,
       contactCount: stageCountsMap[stage.stage!] || stage.contactCount || 0,
     }))

@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import type { SkoolMetricsSnapshot } from '@/features/skool/lib/metrics-sync'
+import type { SkoolMetricsSnapshot } from '@/features/skool/lib/types'
 
 // =============================================================================
 // TYPES

@@ -8,22 +8,8 @@
 import { db, eq, desc, asc, gte } from '@0ne/db/server'
 import { skoolMetrics } from '@0ne/db/server'
 import { DEFAULT_GROUP } from './config'
-
-// =============================================================================
-// TYPES
-// =============================================================================
-
-export interface SkoolMetricsSnapshot {
-  groupSlug: string
-  snapshotDate: string
-  membersTotal: number | null
-  membersActive: number | null
-  communityActivity: number | null
-  category: string | null
-  categoryRank: number | null
-  aboutPageVisits: number | null
-  conversionRate: number | null
-}
+import type { SkoolMetricsSnapshot } from './types'
+export type { SkoolMetricsSnapshot } from './types'
 
 /**
  * Get latest metrics for a group
