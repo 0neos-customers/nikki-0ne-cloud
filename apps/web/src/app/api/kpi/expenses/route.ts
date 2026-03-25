@@ -259,8 +259,7 @@ export async function GET(request: Request) {
         channelMap.set(channel, { spend: 0, leads: 0, clients: 0 })
       }
       channelMap.get(channel)!.spend += metric.spend || 0
-      channelMap.get(channel)!.leads += Number((metric as unknown as Record<string, unknown>).leads) || 0
-      // Note: clients would need to come from a join with conversions data
+      channelMap.get(channel)!.leads += metric.completedRegistrations || 0
     })
 
     const byChannel = Array.from(channelMap.entries()).map(([channel, data]) => ({
