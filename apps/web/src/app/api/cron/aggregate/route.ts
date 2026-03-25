@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { secureCompare, safeErrorResponse } from '@/lib/security'
 import { db, eq, gte, lte, and, isNull } from '@0ne/db/server'
 import {
   contacts, events, adMetrics, revenue, expenses,
@@ -112,7 +113,8 @@ function buildAggregate(
 
 export async function GET(request: Request) {
   const authHeader = request.headers.get('authorization')
-  if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+  const cronSecret = process.env.CRON_SECRET
+  if (!cronSecret || !authHeader || !secureCompare(authHeader, `Bearer ${cronSecret}`)) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
@@ -463,10 +465,7 @@ export async function GET(request: Request) {
   } catch (error) {
     console.error('Aggregate error:', error)
     await syncLogger.fail(String(error))
-    return NextResponse.json(
-      { error: 'Aggregation failed', details: String(error) },
-      { status: 500 }
-    )
+    return safeErrorResponse('Aggregation failed', error)
   }
 }
 

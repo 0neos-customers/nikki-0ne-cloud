@@ -10,6 +10,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server'
+import { secureCompare } from '@/lib/security'
 import {
   syncExtensionMessages,
   getEnabledSyncConfigs,
@@ -32,10 +33,11 @@ export async function GET(request: NextRequest) {
   // Verify cron secret (allow localhost bypass for development)
   const authHeader = request.headers.get('authorization')
   const cronSecret = process.env.CRON_SECRET
-  const isLocalhost = request.headers.get('host')?.includes('localhost')
+  const host = request.headers.get('host') || ''
+  const isLocalhost = host === 'localhost:3000' || host === 'localhost'
   const bypassAuth = isLocalhost && request.nextUrl.searchParams.get('dev') === 'true'
 
-  if (!bypassAuth && (!cronSecret || authHeader !== `Bearer ${cronSecret}`)) {
+  if (!bypassAuth && (!cronSecret || !authHeader || !secureCompare(authHeader, `Bearer ${cronSecret}`))) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 

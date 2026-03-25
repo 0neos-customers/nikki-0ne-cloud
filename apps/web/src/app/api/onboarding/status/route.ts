@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { safeErrorResponse } from '@/lib/security'
 import { auth } from '@clerk/nextjs/server'
 import { db, eq } from '@0ne/db/server'
 import { userInstalls } from '@0ne/db/server'
@@ -47,9 +48,6 @@ export async function GET() {
     })
   } catch (error) {
     console.error('[onboarding/status API] Error:', error)
-    return NextResponse.json(
-      { error: 'Internal server error', details: String(error) },
-      { status: 500 }
-    )
+    return safeErrorResponse('Internal server error', error)
   }
 }

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { safeErrorResponse } from '@/lib/security'
 import { listFiles, deleteFile, type GHLMediaFile as GHLApiFile } from '@/features/media/lib/ghl-media-client'
 
 export const dynamic = 'force-dynamic'
@@ -73,10 +74,7 @@ export async function GET(request: NextRequest) {
       )
     }
 
-    return NextResponse.json(
-      { error: 'Failed to fetch media files', details: String(error) },
-      { status: 500 }
-    )
+    return safeErrorResponse('Failed to fetch media files', error)
   }
 }
 
@@ -100,9 +98,6 @@ export async function DELETE(request: NextRequest) {
     return NextResponse.json({ success: true })
   } catch (error) {
     console.error('[Media API] DELETE error:', error)
-    return NextResponse.json(
-      { error: 'Failed to delete file', details: String(error) },
-      { status: 500 }
-    )
+    return safeErrorResponse('Failed to delete file', error)
   }
 }

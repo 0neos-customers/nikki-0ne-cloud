@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { secureCompare, safeErrorResponse } from '@/lib/security'
 import { db, eq, and, gte, lte } from '@0ne/db/server'
 import { plaidAccounts, personalExpenses } from '@0ne/db/server'
 
@@ -14,7 +15,8 @@ export async function GET(request: Request) {
   const authHeader = request.headers.get('authorization')
   const token = authHeader?.replace('Bearer ', '')
 
-  if (!token || token !== process.env.WIDGET_API_KEY) {
+  const widgetApiKey = process.env.WIDGET_API_KEY
+  if (!token || !widgetApiKey || !secureCompare(token, widgetApiKey)) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
@@ -90,9 +92,6 @@ export async function GET(request: Request) {
     })
   } catch (error) {
     console.error('Widget metrics error:', error)
-    return NextResponse.json(
-      { error: 'Failed to fetch metrics', details: String(error) },
-      { status: 500 }
-    )
+    return safeErrorResponse('Failed to fetch metrics', error)
   }
 }

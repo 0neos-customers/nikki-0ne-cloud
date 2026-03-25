@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { secureCompare } from "@/lib/security";
 import { readFile } from "fs/promises";
 import { join } from "path";
 import { existsSync } from "fs";
@@ -8,7 +9,7 @@ export async function GET(request: Request) {
   const token = searchParams.get("token");
   const expectedToken = process.env.DOWNLOAD_TOKEN;
 
-  if (!token || !expectedToken || token !== expectedToken) {
+  if (!token || !expectedToken || !secureCompare(token, expectedToken)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 

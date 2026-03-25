@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { secureCompare } from '@/lib/security'
 
 /**
  * Validates the external API key from the X-API-Key header
@@ -23,7 +24,7 @@ export function validateExternalApiKey(request: Request): NextResponse | null {
     )
   }
 
-  if (apiKey !== expectedKey) {
+  if (!secureCompare(apiKey, expectedKey)) {
     return NextResponse.json(
       { error: 'Invalid API key' },
       { status: 401 }

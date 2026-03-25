@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { safeErrorResponse } from '@/lib/security'
 import {
   uploadFile,
   isFileSizeValid,
@@ -78,9 +79,6 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    return NextResponse.json(
-      { error: 'Failed to upload file', details: String(error) },
-      { status: 500 }
-    )
+    return safeErrorResponse('Failed to upload file', error)
   }
 }

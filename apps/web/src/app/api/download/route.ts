@@ -1,16 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
+import { secureCompare } from "@/lib/security";
 import { readFile } from "fs/promises";
 import { join } from "path";
 import { existsSync } from "fs";
 
-const VALID_TOKEN = process.env.DOWNLOAD_TOKEN || "";
+const VALID_TOKEN = process.env.DOWNLOAD_TOKEN;
 const ZIP_FILENAME = "0ne.zip";
 
 export async function GET(request: NextRequest) {
   const token = request.nextUrl.searchParams.get("token");
 
   // No token or wrong token → 404 (looks like the page doesn't exist)
-  if (!token || !VALID_TOKEN || token !== VALID_TOKEN) {
+  if (!token || !VALID_TOKEN || !secureCompare(token, VALID_TOKEN)) {
     return new NextResponse(null, { status: 404 });
   }
 

@@ -6,6 +6,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server'
+import { secureCompare } from '@/lib/security'
 import { db, eq, asc } from '@0ne/db/server'
 import { telemetryEvents, telemetryStatusHistory } from '@0ne/db/server'
 
@@ -38,7 +39,7 @@ export async function GET(
   }
 
   const bearerMatch = authHeader?.match(/^Bearer\s+(.+)$/i)
-  if (!bearerMatch || bearerMatch[1] !== expectedKey) {
+  if (!bearerMatch || !secureCompare(bearerMatch[1], expectedKey)) {
     return NextResponse.json(
       { error: 'Invalid or missing authorization' },
       { status: 401, headers: corsHeaders }

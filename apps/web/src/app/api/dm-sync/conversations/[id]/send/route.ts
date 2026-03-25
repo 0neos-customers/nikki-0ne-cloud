@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { safeErrorResponse } from '@/lib/security'
 import { db, eq, and } from '@0ne/db/server'
 import { dmMessages } from '@0ne/db/server'
 
@@ -108,16 +109,10 @@ export async function POST(
       } as SendMessageResponse)
     } catch (insertError) {
       console.error('[Send Message API] INSERT error:', insertError)
-      return NextResponse.json(
-        { error: 'Failed to queue message', details: String(insertError) },
-        { status: 500 }
-      )
+      return safeErrorResponse('Failed to queue message', insertError)
     }
   } catch (error) {
     console.error('[Send Message API] POST exception:', error)
-    return NextResponse.json(
-      { error: 'Failed to send message', details: String(error) },
-      { status: 500 }
-    )
+    return safeErrorResponse('Failed to send message', error)
   }
 }

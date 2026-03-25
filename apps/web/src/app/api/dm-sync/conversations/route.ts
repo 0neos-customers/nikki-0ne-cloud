@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { safeErrorResponse } from '@/lib/security'
 import { db, desc, inArray, isNotNull } from '@0ne/db/server'
 import { dmMessages, dmContactMappings, skoolMembers, conversationSyncStatus } from '@0ne/db/server'
 
@@ -269,9 +270,6 @@ export async function GET(request: NextRequest) {
     } as ConversationsResponse)
   } catch (error) {
     console.error('[Conversations API] GET exception:', error)
-    return NextResponse.json(
-      { error: 'Failed to fetch conversations', details: String(error) },
-      { status: 500 }
-    )
+    return safeErrorResponse('Failed to fetch conversations', error)
   }
 }

@@ -11,6 +11,7 @@
  */
 
 import { NextResponse } from 'next/server'
+import { secureCompare, safeErrorResponse } from '@/lib/security'
 import { db, eq, desc, gte, and, count } from '@0ne/db/server'
 import { ghlTransactions, syncActivityLog } from '@0ne/db/server'
 import { GHLClient, type GHLTransaction } from '@/features/kpi/lib/ghl-client'
@@ -29,7 +30,7 @@ function verifyCronSecret(request: Request): boolean {
     return false
   }
 
-  return authHeader === `Bearer ${cronSecret}`
+  return !!authHeader && secureCompare(authHeader, `Bearer ${cronSecret}`)
 }
 
 export async function GET(request: Request) {
@@ -145,10 +146,7 @@ export async function GET(request: Request) {
     })
   } catch (error) {
     console.error('[sync-ghl-payments] Sync failed:', error)
-    return NextResponse.json(
-      { error: 'Sync failed', details: String(error) },
-      { status: 500 }
-    )
+    return safeErrorResponse('Sync failed', error)
   }
 }
 

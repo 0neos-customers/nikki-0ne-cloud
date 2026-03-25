@@ -9,6 +9,7 @@
  */
 
 import { NextResponse } from 'next/server'
+import { safeErrorResponse } from '@/lib/security'
 import { db, desc, inArray } from '@0ne/db/server'
 import { syncActivityLog } from '@0ne/db/server'
 import type { SyncType, SyncStatus } from '@/lib/sync-log'
@@ -85,9 +86,6 @@ export async function GET() {
     })
   } catch (error) {
     console.error('[last-runs API] Error:', error)
-    return NextResponse.json(
-      { error: 'Internal server error', details: String(error) },
-      { status: 500 }
-    )
+    return safeErrorResponse('Internal server error', error)
   }
 }

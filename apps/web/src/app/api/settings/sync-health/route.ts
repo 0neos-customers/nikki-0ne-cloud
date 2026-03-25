@@ -13,6 +13,7 @@
  */
 
 import { NextResponse } from 'next/server'
+import { safeErrorResponse } from '@/lib/security'
 import { db, desc, gte } from '@0ne/db/server'
 import { syncActivityLog } from '@0ne/db/server'
 
@@ -81,9 +82,6 @@ export async function GET() {
     return NextResponse.json(response)
   } catch (error) {
     console.error('[sync-health API] Error:', error)
-    return NextResponse.json(
-      { error: 'Internal server error', details: String(error) },
-      { status: 500 }
-    )
+    return safeErrorResponse('Internal server error', error)
   }
 }

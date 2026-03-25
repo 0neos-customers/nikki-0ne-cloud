@@ -13,6 +13,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server'
+import { safeErrorResponse } from '@/lib/security'
 import { db, eq, desc, and, lt } from '@0ne/db/server'
 import { syncActivityLog } from '@0ne/db/server'
 import type { SyncType, SyncStatus } from '@/lib/sync-log'
@@ -126,10 +127,7 @@ export async function GET(request: NextRequest) {
     })
   } catch (error) {
     console.error('[sync-log API] Error:', error)
-    return NextResponse.json(
-      { error: 'Internal server error', details: String(error) },
-      { status: 500 }
-    )
+    return safeErrorResponse('Internal server error', error)
   }
 }
 
@@ -177,9 +175,6 @@ export async function POST(request: NextRequest) {
     })
   } catch (error) {
     console.error('[sync-log API] POST Error:', error)
-    return NextResponse.json(
-      { error: 'Internal server error', details: String(error) },
-      { status: 500 }
-    )
+    return safeErrorResponse('Internal server error', error)
   }
 }

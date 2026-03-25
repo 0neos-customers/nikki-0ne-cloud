@@ -12,8 +12,18 @@
  */
 
 import { NextResponse } from 'next/server'
+import { safeErrorResponse } from '@/lib/security'
 
 const GHL_OAUTH_URL = 'https://services.leadconnectorhq.com/oauth/token'
+
+function escapeHtml(str: string): string {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;')
+}
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url)
@@ -52,7 +62,7 @@ export async function GET(request: Request) {
 <body>
   <h1>GHL Marketplace OAuth Setup</h1>
   <p>Click the button below to authorize the app and get your OAuth tokens:</p>
-  <p><a href="${authUrl}" style="display: inline-block; background: #FF692D; color: white; padding: 12px 24px; border-radius: 6px; text-decoration: none;">Authorize with GHL</a></p>
+  <p><a href="${escapeHtml(authUrl)}" style="display: inline-block; background: #FF692D; color: white; padding: 12px 24px; border-radius: 6px; text-decoration: none;">Authorize with GHL</a></p>
   <h2>After Authorization</h2>
   <p>You'll be redirected back here with your tokens. Copy them to your <code>.env.local</code> file.</p>
 </body>
@@ -110,17 +120,11 @@ export async function GET(request: Request) {
 <body>
   <h1>OAuth Error</h1>
   <div class="error">
-    <p><strong>Error:</strong> ${data.error || 'Unknown error'}</p>
-    <p>${data.error_description || ''}</p>
+    <p><strong>Error:</strong> ${escapeHtml(String(data.error || 'Unknown error'))}</p>
+    <p>${escapeHtml(String(data.error_description || ''))}</p>
   </div>
-  <h3>Debug Info</h3>
-  <pre>Client ID set: ${!!process.env.GHL_MARKETPLACE_CLIENT_ID}
-Client ID length: ${process.env.GHL_MARKETPLACE_CLIENT_ID?.length || 0}
-Client ID preview: ${process.env.GHL_MARKETPLACE_CLIENT_ID?.substring(0, 10)}...
-App URL: ${process.env.NEXT_PUBLIC_APP_URL}
-Redirect URI: ${process.env.NEXT_PUBLIC_APP_URL}/api/auth/marketplace/callback</pre>
   <h3>Full Response</h3>
-  <pre>${JSON.stringify(data, null, 2)}</pre>
+  <pre>${escapeHtml(JSON.stringify(data, null, 2))}</pre>
 </body>
 </html>
       `, {
@@ -129,7 +133,16 @@ Redirect URI: ${process.env.NEXT_PUBLIC_APP_URL}/api/auth/marketplace/callback</
       })
     }
 
-    // Success - display tokens
+    // Log tokens server-side (check Vercel logs or terminal output)
+    console.log('[OAuth] Tokens obtained successfully:', {
+      locationId: data.locationId,
+      userId: data.userId,
+      accessToken: data.access_token,
+      refreshToken: data.refresh_token,
+      expiresIn: data.expires_in,
+    })
+
+    // Success - tokens logged server-side only, NOT rendered in HTML
     return new Response(`
 <!DOCTYPE html>
 <html>
@@ -139,41 +152,31 @@ Redirect URI: ${process.env.NEXT_PUBLIC_APP_URL}/api/auth/marketplace/callback</
     body { font-family: system-ui; max-width: 800px; margin: 40px auto; padding: 20px; }
     h1 { color: #22c55e; }
     .success { background: #f0fdf4; border: 1px solid #bbf7d0; padding: 16px; border-radius: 8px; margin-bottom: 20px; }
-    pre { background: #1e1e1e; color: #d4d4d4; padding: 16px; border-radius: 8px; overflow-x: auto; }
-    .copy-btn { background: #FF692D; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; margin-top: 8px; }
+    .info { background: #eff6ff; border: 1px solid #bfdbfe; padding: 16px; border-radius: 8px; margin-bottom: 20px; }
     .warning { background: #fef3c7; border: 1px solid #fcd34d; padding: 12px; border-radius: 6px; margin-top: 16px; }
   </style>
 </head>
 <body>
-  <h1>✅ OAuth Authorization Successful!</h1>
+  <h1>OAuth Authorization Successful!</h1>
   <div class="success">
-    <p><strong>Location ID:</strong> ${data.locationId || 'N/A'}</p>
-    <p><strong>User ID:</strong> ${data.userId || 'N/A'}</p>
-    <p><strong>Scopes:</strong> ${data.scope || 'N/A'}</p>
+    <p><strong>Location ID:</strong> ${escapeHtml(String(data.locationId || 'N/A'))}</p>
+    <p><strong>User ID:</strong> ${escapeHtml(String(data.userId || 'N/A'))}</p>
+    <p><strong>Scopes:</strong> ${escapeHtml(String(data.scope || 'N/A'))}</p>
   </div>
 
-  <h2>Add to .env.local</h2>
-  <pre id="env-vars">
-# GHL OAuth Tokens (obtained ${new Date().toISOString()})
-GHL_MARKETPLACE_ACCESS_TOKEN=${data.access_token}
-GHL_MARKETPLACE_REFRESH_TOKEN=${data.refresh_token}
-GHL_MARKETPLACE_TOKEN_EXPIRES=${Date.now() + (data.expires_in * 1000)}
-  </pre>
-  <button class="copy-btn" onclick="navigator.clipboard.writeText(document.getElementById('env-vars').textContent)">
-    Copy to Clipboard
-  </button>
+  <div class="info">
+    <p><strong>Tokens have been logged to the server console.</strong></p>
+    <p>Check Vercel logs or terminal output to retrieve your access and refresh tokens.</p>
+  </div>
 
   <div class="warning">
-    <strong>⚠️ Important:</strong>
+    <strong>Important:</strong>
     <ul>
-      <li>Add these to <code>.env.local</code> AND Vercel environment variables</li>
+      <li>Add tokens from server logs to <code>.env.local</code> AND Vercel environment variables</li>
       <li>The refresh token is permanent - guard it carefully</li>
       <li>After adding, run: <code>bun run scripts/register-ghl-provider.ts</code></li>
     </ul>
   </div>
-
-  <h2>Full Response</h2>
-  <pre>${JSON.stringify(data, null, 2)}</pre>
 </body>
 </html>
     `, {
@@ -182,9 +185,6 @@ GHL_MARKETPLACE_TOKEN_EXPIRES=${Date.now() + (data.expires_in * 1000)}
 
   } catch (error) {
     console.error('OAuth error:', error)
-    return NextResponse.json(
-      { error: 'Token exchange failed', details: String(error) },
-      { status: 500 }
-    )
+    return safeErrorResponse('Token exchange failed', error)
   }
 }

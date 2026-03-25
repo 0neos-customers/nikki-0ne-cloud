@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { safeErrorResponse } from '@/lib/security'
 import { db, eq, desc, and, or, count, inArray, ilike } from '@0ne/db/server'
 import { dmMessages, dmContactMappings, dmSyncConfig } from '@0ne/db/server'
 
@@ -185,9 +186,6 @@ export async function GET(request: NextRequest) {
     } as RawMessagesResponse)
   } catch (error) {
     console.error('[Raw Messages API] GET exception:', error)
-    return NextResponse.json(
-      { error: 'Failed to fetch raw messages', details: String(error) },
-      { status: 500 }
-    )
+    return safeErrorResponse('Failed to fetch raw messages', error)
   }
 }

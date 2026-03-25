@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { secureCompare, safeErrorResponse } from '@/lib/security'
 import { db, eq } from '@0ne/db/server'
 import { plaidItems, plaidAccounts, plaidTransactions, plaidCategoryMappings } from '@0ne/db/server'
 import { syncTransactions } from '@/lib/plaid-client'
@@ -8,7 +9,8 @@ export const dynamic = 'force-dynamic'
 
 export async function GET(request: Request) {
   const authHeader = request.headers.get('authorization')
-  if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+  const cronSecret = process.env.CRON_SECRET
+  if (!cronSecret || !authHeader || !secureCompare(authHeader, `Bearer ${cronSecret}`)) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
@@ -183,9 +185,6 @@ export async function GET(request: Request) {
     })
   } catch (error) {
     console.error('Plaid cron sync error:', error)
-    return NextResponse.json(
-      { error: 'Cron sync failed', details: String(error) },
-      { status: 500 }
-    )
+    return safeErrorResponse('Cron sync failed', error)
   }
 }

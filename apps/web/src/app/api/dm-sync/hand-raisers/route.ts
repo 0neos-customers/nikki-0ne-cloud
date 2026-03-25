@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { safeErrorResponse } from '@/lib/security'
 import { auth } from '@clerk/nextjs/server'
 import { db, eq, desc, inArray } from '@0ne/db/server'
 import { dmHandRaiserCampaigns, dmHandRaiserSent } from '@0ne/db/server'
@@ -90,10 +91,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ campaigns: campaignsWithStats })
   } catch (error) {
     console.error('[Hand-Raisers API] GET exception:', error)
-    return NextResponse.json(
-      { error: 'Failed to fetch hand-raiser campaigns', details: String(error) },
-      { status: 500 }
-    )
+    return safeErrorResponse('Failed to fetch hand-raiser campaigns', error)
   }
 }
 
@@ -128,10 +126,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ campaign: data }, { status: 201 })
   } catch (error) {
     console.error('[Hand-Raisers API] POST exception:', error)
-    return NextResponse.json(
-      { error: 'Failed to create hand-raiser campaign', details: String(error) },
-      { status: 500 }
-    )
+    return safeErrorResponse('Failed to create hand-raiser campaign', error)
   }
 }
 
@@ -169,10 +164,7 @@ export async function PUT(request: NextRequest) {
     return NextResponse.json({ campaign: data })
   } catch (error) {
     console.error('[Hand-Raisers API] PUT exception:', error)
-    return NextResponse.json(
-      { error: 'Failed to update hand-raiser campaign', details: String(error) },
-      { status: 500 }
-    )
+    return safeErrorResponse('Failed to update hand-raiser campaign', error)
   }
 }
 
@@ -199,9 +191,6 @@ export async function DELETE(request: NextRequest) {
     return NextResponse.json({ success: true })
   } catch (error) {
     console.error('[Hand-Raisers API] DELETE exception:', error)
-    return NextResponse.json(
-      { error: 'Failed to delete hand-raiser campaign', details: String(error) },
-      { status: 500 }
-    )
+    return safeErrorResponse('Failed to delete hand-raiser campaign', error)
   }
 }

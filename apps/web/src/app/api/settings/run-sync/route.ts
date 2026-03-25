@@ -12,6 +12,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server'
+import { safeErrorResponse } from '@/lib/security'
 import { auth } from '@clerk/nextjs/server'
 import type { SyncType } from '@/lib/sync-log'
 import {
@@ -108,10 +109,7 @@ export async function POST(request: NextRequest) {
     })
   } catch (error) {
     console.error('[run-sync API] Error:', error)
-    return NextResponse.json(
-      { error: 'Internal server error', details: String(error) },
-      { status: 500 }
-    )
+    return safeErrorResponse('Internal server error', error)
   }
 }
 
@@ -119,18 +117,7 @@ export async function POST(request: NextRequest) {
  * Get the base URL from the request
  */
 function getBaseUrl(request: NextRequest): string {
-  // Try to use the request URL first
-  const url = new URL(request.url)
-
-  // In production, use the host header
-  const host = request.headers.get('host')
-  if (host) {
-    const protocol = request.headers.get('x-forwarded-proto') || 'https'
-    return `${protocol}://${host}`
-  }
-
-  // Fallback to request URL origin
-  return url.origin
+  return request.nextUrl.origin
 }
 
 /**

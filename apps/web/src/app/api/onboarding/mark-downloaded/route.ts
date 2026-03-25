@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { safeErrorResponse } from '@/lib/security'
 import { auth } from '@clerk/nextjs/server'
 import { db, eq, and } from '@0ne/db/server'
 import { userInstalls } from '@0ne/db/server'
@@ -24,9 +25,6 @@ export async function POST() {
     return NextResponse.json({ success: true })
   } catch (error) {
     console.error('[onboarding/mark-downloaded API] Error:', error)
-    return NextResponse.json(
-      { error: 'Internal server error', details: String(error) },
-      { status: 500 }
-    )
+    return safeErrorResponse('Internal server error', error)
   }
 }

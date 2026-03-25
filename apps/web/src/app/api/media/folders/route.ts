@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { safeErrorResponse } from '@/lib/security'
 import { createFolder } from '@/features/media/lib/ghl-media-client'
 
 export const dynamic = 'force-dynamic'
@@ -45,9 +46,6 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    return NextResponse.json(
-      { error: 'Failed to create folder', details: String(error) },
-      { status: 500 }
-    )
+    return safeErrorResponse('Failed to create folder', error)
   }
 }

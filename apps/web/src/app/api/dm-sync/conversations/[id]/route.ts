@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { safeErrorResponse } from '@/lib/security'
 import { db, eq, and, asc, lt, isNotNull, inArray } from '@0ne/db/server'
 import { dmMessages, dmContactMappings, skoolMembers, conversationSyncStatus } from '@0ne/db/server'
 
@@ -165,9 +166,6 @@ export async function GET(
     } as ConversationDetailResponse)
   } catch (error) {
     console.error('[Conversation Detail API] GET exception:', error)
-    return NextResponse.json(
-      { error: 'Failed to fetch conversation', details: String(error) },
-      { status: 500 }
-    )
+    return safeErrorResponse('Failed to fetch conversation', error)
   }
 }

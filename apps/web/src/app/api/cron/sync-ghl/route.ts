@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { secureCompare, safeErrorResponse } from '@/lib/security'
 import { db, rawSql } from '@0ne/db/server'
 import { contacts } from '@0ne/db/server'
 import { GHLClient } from '@/features/kpi/lib/ghl-client'
@@ -15,7 +16,8 @@ export const dynamic = 'force-dynamic'
 
 export async function GET(request: Request) {
   const authHeader = request.headers.get('authorization')
-  if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+  const cronSecret = process.env.CRON_SECRET
+  if (!cronSecret || !authHeader || !secureCompare(authHeader, `Bearer ${cronSecret}`)) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
@@ -204,9 +206,6 @@ export async function GET(request: Request) {
     console.error('Sync error:', error)
     // Log sync failure
     await syncLog.fail(String(error))
-    return NextResponse.json(
-      { error: 'Sync failed', details: String(error) },
-      { status: 500 }
-    )
+    return safeErrorResponse('Sync failed', error)
   }
 }

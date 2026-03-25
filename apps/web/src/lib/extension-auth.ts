@@ -10,6 +10,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server'
+import { secureCompare } from '@/lib/security'
 import { auth, clerkClient } from '@clerk/nextjs/server'
 
 // =============================================
@@ -75,7 +76,7 @@ export async function validateExtensionAuth(request: NextRequest): Promise<AuthR
       return { valid: false, authType: 'apiKey', error: 'Server configuration error' }
     }
 
-    if (bearerMatch[1] === expectedKey) {
+    if (secureCompare(bearerMatch[1], expectedKey)) {
       return { valid: true, authType: 'apiKey' }
     }
     return { valid: false, authType: 'apiKey', error: 'Invalid API key' }
@@ -108,7 +109,7 @@ export function validateExtensionApiKey(request: NextRequest): NextResponse | nu
   }
 
   const match = authHeader.match(/^Bearer\s+(.+)$/i)
-  if (!match || match[1] !== expectedKey) {
+  if (!match || !secureCompare(match[1], expectedKey)) {
     return NextResponse.json(
       { error: 'Invalid API key' },
       { status: 401, headers: corsHeaders }

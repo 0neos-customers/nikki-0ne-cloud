@@ -9,6 +9,7 @@
  */
 
 import { NextResponse } from 'next/server'
+import { secureCompare } from '@/lib/security'
 import { db } from '@0ne/db/server'
 import { syncActivityLog } from '@0ne/db/server'
 import { sendScheduledSnapshots } from '@/features/notifications/lib/send-notification'
@@ -19,7 +20,8 @@ export const dynamic = 'force-dynamic'
 export async function GET(request: Request) {
   // Verify cron secret
   const authHeader = request.headers.get('authorization')
-  if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+  const cronSecret = process.env.CRON_SECRET
+  if (!cronSecret || !authHeader || !secureCompare(authHeader, `Bearer ${cronSecret}`)) {
     console.error('[cron/send-daily-snapshot] Unauthorized request')
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }

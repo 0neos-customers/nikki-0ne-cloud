@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { secureCompare, safeErrorResponse } from '@/lib/security'
 import { db, eq, and } from '@0ne/db/server'
 import { adMetrics, campaigns, metaAccountDaily, expenses } from '@0ne/db/server'
 import { SyncLogger } from '@/lib/sync-log'
@@ -89,7 +90,8 @@ function getActionValue(
 
 export async function GET(request: Request) {
   const authHeader = request.headers.get('authorization')
-  if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+  const cronSecret = process.env.CRON_SECRET
+  if (!cronSecret || !authHeader || !secureCompare(authHeader, `Bearer ${cronSecret}`)) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
@@ -412,9 +414,6 @@ export async function GET(request: Request) {
   } catch (error) {
     console.error('Meta sync error:', error)
     await syncLog.fail(String(error))
-    return NextResponse.json(
-      { error: 'Meta sync failed', details: String(error) },
-      { status: 500 }
-    )
+    return safeErrorResponse('Meta sync failed', error)
   }
 }

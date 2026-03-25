@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { safeErrorResponse } from '@/lib/security'
 import {
   getFile,
   updateFile,
@@ -47,10 +48,7 @@ export async function GET(
       )
     }
 
-    return NextResponse.json(
-      { error: 'Failed to fetch file', details: String(error) },
-      { status: 500 }
-    )
+    return safeErrorResponse('Failed to fetch file', error)
   }
 }
 
@@ -109,10 +107,7 @@ export async function PUT(
       )
     }
 
-    return NextResponse.json(
-      { error: 'Failed to update file', details: String(error) },
-      { status: 500 }
-    )
+    return safeErrorResponse('Failed to update file', error)
   }
 }
 
@@ -156,9 +151,6 @@ export async function DELETE(
       )
     }
 
-    return NextResponse.json(
-      { error: 'Failed to delete file', details: String(error) },
-      { status: 500 }
-    )
+    return safeErrorResponse('Failed to delete file', error)
   }
 }
