@@ -3,6 +3,7 @@ import { Baskervville, Montserrat, JetBrains_Mono } from "next/font/google";
 import { ClerkProvider } from "@clerk/nextjs";
 import { Toaster } from "@0ne/ui";
 import { AppleSplashScreens } from "@/components/pwa/AppleSplashScreens";
+import { AppOnly } from "@/components/pwa/AppOnly";
 import { InstallPrompt } from "@/components/pwa/InstallPrompt";
 import { LoadingScreen } from "@/components/pwa/LoadingScreen";
 import { ServiceWorkerRegistrar } from "@/components/pwa/ServiceWorkerRegistrar";
@@ -59,11 +60,13 @@ export default function RootLayout({
         <body
           className={`${baskervville.variable} ${montserrat.variable} ${jetbrainsMono.variable} font-body antialiased`}
         >
-          <LoadingScreen />
+          <AppOnly><LoadingScreen /></AppOnly>
           {children}
           <Toaster />
-          <InstallPrompt />
-          <ServiceWorkerRegistrar />
+          <AppOnly>
+            <InstallPrompt />
+            <ServiceWorkerRegistrar />
+          </AppOnly>
         </body>
       </html>
     </ClerkProvider>
