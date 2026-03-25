@@ -194,9 +194,8 @@ function InstallPrepContent() {
           href="/"
           className="flex items-baseline gap-0.5 text-xl font-semibold tracking-tight"
         >
-          <span className="italic text-[var(--color-orange)]" style={{ fontFamily: "var(--font-heading), Georgia, serif" }}>O</span>
-          <span>ne</span>
-          <span className="ml-1.5 text-[var(--color-muted)] font-normal">OS</span>
+          <span className="italic text-[var(--color-orange)]" style={{ fontFamily: "var(--font-heading), Georgia, serif" }}>One</span>
+          <span className="ml-1.5 text-[var(--color-muted)] font-medium text-base">OS</span>
         </a>
         <span className="text-sm text-[var(--color-muted)]">Session Prep</span>
       </nav>
