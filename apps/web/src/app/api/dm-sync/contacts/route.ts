@@ -5,46 +5,46 @@ import { dmContactMappings, dmMessages, dmSyncConfig, contactChannels as contact
 export const dynamic = 'force-dynamic'
 
 interface ContactChannelInfo {
-  staff_skool_id: string
-  skool_channel_id: string
-  staff_display_name: string | null
+  staffSkoolId: string
+  skoolChannelId: string
+  staffDisplayName: string | null
 }
 
 interface ContactActivity {
   id: string
-  skool_user_id: string
-  skool_username: string | null
-  skool_display_name: string | null
-  ghl_contact_id: string | null
-  match_method: 'skool_id' | 'email' | 'name' | 'synthetic' | 'manual' | 'no_email' | 'skool_members' | null
+  skoolUserId: string
+  skoolUsername: string | null
+  skoolDisplayName: string | null
+  ghlContactId: string | null
+  matchMethod: 'skool_id' | 'email' | 'name' | 'synthetic' | 'manual' | 'no_email' | 'skool_members' | null
   email: string | null
   phone: string | null
-  contact_type: 'community_member' | 'dm_contact' | 'unknown' | null
-  created_at: string
-  skool_conversation_id: string | null
+  contactType: 'community_member' | 'dm_contact' | 'unknown' | null
+  createdAt: string
+  skoolConversationId: string | null
   channels: ContactChannelInfo[]
   stats: {
-    inbound_count: number
-    outbound_count: number
-    synced_count: number
-    pending_count: number
-    failed_count: number
-    last_activity_at: string | null
+    inboundCount: number
+    outboundCount: number
+    syncedCount: number
+    pendingCount: number
+    failedCount: number
+    lastActivityAt: string | null
   }
-  survey_answers: Array<{ question: string; answer: string }> | null
-  ghl_location_id: string
-  skool_community_slug: string
+  surveyAnswers: Array<{ question: string; answer: string }> | null
+  ghlLocationId: string
+  skoolCommunitySlug: string
 }
 
 interface ContactActivityResponse {
   contacts: ContactActivity[]
   summary: {
-    total_contacts: number
-    matched_contacts: number
-    unmatched_contacts: number
-    total_messages: number
-    contacts_with_pending: number
-    contacts_with_failed: number
+    totalContacts: number
+    matchedContacts: number
+    unmatchedContacts: number
+    totalMessages: number
+    contactsWithPending: number
+    contactsWithFailed: number
   }
   total: number
 }
@@ -96,12 +96,12 @@ export async function GET(request: NextRequest) {
     const uniqueFailed = new Set(failedContacts.map((m) => m.skoolUserId))
 
     const summary = {
-      total_contacts: Number(matchedCount || 0) + Number(unmatchedCount || 0),
-      matched_contacts: Number(matchedCount || 0),
-      unmatched_contacts: Number(unmatchedCount || 0),
-      total_messages: Number(totalMessages || 0),
-      contacts_with_pending: uniquePending.size,
-      contacts_with_failed: uniqueFailed.size,
+      totalContacts: Number(matchedCount || 0) + Number(unmatchedCount || 0),
+      matchedContacts: Number(matchedCount || 0),
+      unmatchedContacts: Number(unmatchedCount || 0),
+      totalMessages: Number(totalMessages || 0),
+      contactsWithPending: uniquePending.size,
+      contactsWithFailed: uniqueFailed.size,
     }
 
     // =========================================================================
@@ -165,12 +165,12 @@ export async function GET(request: NextRequest) {
         }).from(dmSyncConfig).where(inArray(dmSyncConfig.clerkUserId, userIds))
       : []
 
-    const configMap = new Map<string, { ghl_location_id: string; skool_community_slug: string }>()
+    const configMap = new Map<string, { ghlLocationId: string; skoolCommunitySlug: string }>()
     syncConfigs.forEach((config) => {
       if (config.clerkUserId) {
         configMap.set(config.clerkUserId, {
-          ghl_location_id: config.ghlLocationId || '',
-          skool_community_slug: config.skoolCommunitySlug || '',
+          ghlLocationId: config.ghlLocationId || '',
+          skoolCommunitySlug: config.skoolCommunitySlug || '',
         })
       }
     })
@@ -269,21 +269,21 @@ export async function GET(request: NextRequest) {
       if (!ch.skoolUserId) return
       const existing = channelsMap.get(ch.skoolUserId) || []
       existing.push({
-        staff_skool_id: ch.staffSkoolId || '',
-        skool_channel_id: ch.skoolChannelId || '',
-        staff_display_name: ch.staffSkoolId ? staffNameMap.get(ch.staffSkoolId) || null : null,
+        staffSkoolId: ch.staffSkoolId || '',
+        skoolChannelId: ch.skoolChannelId || '',
+        staffDisplayName: ch.staffSkoolId ? staffNameMap.get(ch.staffSkoolId) || null : null,
       })
       channelsMap.set(ch.skoolUserId, existing)
     })
 
     // Aggregate message stats per user
     const statsMap = new Map<string, {
-      inbound_count: number
-      outbound_count: number
-      synced_count: number
-      pending_count: number
-      failed_count: number
-      last_activity_at: string | null
+      inboundCount: number
+      outboundCount: number
+      syncedCount: number
+      pendingCount: number
+      failedCount: number
+      lastActivityAt: string | null
     }>()
 
     // Build conversation ID map (most recent per user)
@@ -293,21 +293,21 @@ export async function GET(request: NextRequest) {
       if (!msg.skoolUserId) return
       // Stats
       const existing = statsMap.get(msg.skoolUserId) || {
-        inbound_count: 0, outbound_count: 0,
-        synced_count: 0, pending_count: 0, failed_count: 0,
-        last_activity_at: null,
+        inboundCount: 0, outboundCount: 0,
+        syncedCount: 0, pendingCount: 0, failedCount: 0,
+        lastActivityAt: null,
       }
 
-      if (msg.direction === 'inbound') existing.inbound_count++
-      else if (msg.direction === 'outbound') existing.outbound_count++
+      if (msg.direction === 'inbound') existing.inboundCount++
+      else if (msg.direction === 'outbound') existing.outboundCount++
 
-      if (msg.status === 'synced') existing.synced_count++
-      else if (msg.status === 'pending') existing.pending_count++
-      else if (msg.status === 'failed') existing.failed_count++
+      if (msg.status === 'synced') existing.syncedCount++
+      else if (msg.status === 'pending') existing.pendingCount++
+      else if (msg.status === 'failed') existing.failedCount++
 
       const createdAtStr = msg.createdAt?.toISOString() || null
-      if (createdAtStr && (!existing.last_activity_at || createdAtStr > existing.last_activity_at)) {
-        existing.last_activity_at = createdAtStr
+      if (createdAtStr && (!existing.lastActivityAt || createdAtStr > existing.lastActivityAt)) {
+        existing.lastActivityAt = createdAtStr
       }
 
       statsMap.set(msg.skoolUserId, existing)
@@ -328,42 +328,42 @@ export async function GET(request: NextRequest) {
     let contactsWithStats: ContactActivity[] = mappings.map((mapping) => {
       const skoolUserId = mapping.skoolUserId || ''
       const stats = statsMap.get(skoolUserId) || {
-        inbound_count: 0, outbound_count: 0,
-        synced_count: 0, pending_count: 0, failed_count: 0,
-        last_activity_at: null,
+        inboundCount: 0, outboundCount: 0,
+        syncedCount: 0, pendingCount: 0, failedCount: 0,
+        lastActivityAt: null,
       }
 
       const config = mapping.clerkUserId ? configMap.get(mapping.clerkUserId) : undefined
 
       return {
         id: mapping.id,
-        skool_user_id: skoolUserId,
-        skool_username: mapping.skoolUsername,
-        skool_display_name: mapping.skoolDisplayName,
-        ghl_contact_id: mapping.ghlContactId,
-        match_method: mapping.matchMethod as ContactActivity['match_method'],
+        skoolUserId: skoolUserId,
+        skoolUsername: mapping.skoolUsername,
+        skoolDisplayName: mapping.skoolDisplayName,
+        ghlContactId: mapping.ghlContactId,
+        matchMethod: mapping.matchMethod as ContactActivity['matchMethod'],
         email: mapping.email || memberEmailMap.get(skoolUserId) || null,
         phone: mapping.phone || memberPhoneMap.get(skoolUserId) || null,
-        contact_type: (mapping.contactType as ContactActivity['contact_type']) || null,
-        created_at: mapping.createdAt?.toISOString() || new Date().toISOString(),
-        skool_conversation_id: conversationMap.get(skoolUserId) || null,
+        contactType: (mapping.contactType as ContactActivity['contactType']) || null,
+        createdAt: mapping.createdAt?.toISOString() || new Date().toISOString(),
+        skoolConversationId: conversationMap.get(skoolUserId) || null,
         channels: channelsMap.get(skoolUserId) || [],
         stats,
-        survey_answers: surveyMap.get(skoolUserId) || null,
-        ghl_location_id: config?.ghl_location_id || '',
-        skool_community_slug: config?.skool_community_slug || '',
+        surveyAnswers: surveyMap.get(skoolUserId) || null,
+        ghlLocationId: config?.ghlLocationId || '',
+        skoolCommunitySlug: config?.skoolCommunitySlug || '',
       }
     })
 
     // Apply status filter (post-aggregation since it depends on message stats)
     if (status && status !== 'all') {
       if (status === 'pending') {
-        contactsWithStats = contactsWithStats.filter((c) => c.stats.pending_count > 0)
+        contactsWithStats = contactsWithStats.filter((c) => c.stats.pendingCount > 0)
       } else if (status === 'failed') {
-        contactsWithStats = contactsWithStats.filter((c) => c.stats.failed_count > 0)
+        contactsWithStats = contactsWithStats.filter((c) => c.stats.failedCount > 0)
       } else if (status === 'synced') {
         contactsWithStats = contactsWithStats.filter(
-          (c) => c.stats.synced_count > 0 && c.stats.pending_count === 0 && c.stats.failed_count === 0
+          (c) => c.stats.syncedCount > 0 && c.stats.pendingCount === 0 && c.stats.failedCount === 0
         )
       }
     }

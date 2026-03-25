@@ -7,18 +7,18 @@ export const dynamic = 'force-dynamic'
 
 interface HandRaiserCampaignWithStats {
   id: string
-  clerk_user_id: string | null
-  post_url: string
-  skool_post_id: string | null
-  keyword_filter: string | null
-  dm_template: string | null
-  ghl_tag: string | null
-  is_active: boolean | null
-  created_at: string
-  updated_at: string
+  clerkUserId: string | null
+  postUrl: string
+  skoolPostId: string | null
+  keywordFilter: string | null
+  dmTemplate: string | null
+  ghlTag: string | null
+  isActive: boolean | null
+  createdAt: string
+  updatedAt: string
   stats: {
-    sent_count: number
-    last_sent_at: string | null
+    sentCount: number
+    lastSentAt: string | null
   }
 }
 
@@ -55,35 +55,35 @@ export async function GET(request: NextRequest) {
       // Aggregate stats
       const statsMap = new Map<
         string,
-        { sent_count: number; last_sent_at: string | null }
+        { sentCount: number; lastSentAt: string | null }
       >()
 
       sentDms.forEach((dm) => {
         if (!dm.campaignId) return
         const existing = statsMap.get(dm.campaignId) || {
-          sent_count: 0,
-          last_sent_at: null,
+          sentCount: 0,
+          lastSentAt: null,
         }
-        existing.sent_count++
+        existing.sentCount++
         const sentAtStr = dm.sentAt?.toISOString() || null
-        if (sentAtStr && (!existing.last_sent_at || sentAtStr > existing.last_sent_at)) {
-          existing.last_sent_at = sentAtStr
+        if (sentAtStr && (!existing.lastSentAt || sentAtStr > existing.lastSentAt)) {
+          existing.lastSentAt = sentAtStr
         }
         statsMap.set(dm.campaignId, existing)
       })
 
       campaignsWithStats = data.map((campaign) => ({
         id: campaign.id,
-        clerk_user_id: campaign.clerkUserId,
-        post_url: campaign.postUrl,
-        skool_post_id: campaign.skoolPostId,
-        keyword_filter: campaign.keywordFilter,
-        dm_template: campaign.dmTemplate,
-        ghl_tag: campaign.ghlTag,
-        is_active: campaign.isActive,
-        created_at: campaign.createdAt?.toISOString() || new Date().toISOString(),
-        updated_at: campaign.updatedAt?.toISOString() || new Date().toISOString(),
-        stats: statsMap.get(campaign.id) || { sent_count: 0, last_sent_at: null },
+        clerkUserId: campaign.clerkUserId,
+        postUrl: campaign.postUrl,
+        skoolPostId: campaign.skoolPostId,
+        keywordFilter: campaign.keywordFilter,
+        dmTemplate: campaign.dmTemplate,
+        ghlTag: campaign.ghlTag,
+        isActive: campaign.isActive,
+        createdAt: campaign.createdAt?.toISOString() || new Date().toISOString(),
+        updatedAt: campaign.updatedAt?.toISOString() || new Date().toISOString(),
+        stats: statsMap.get(campaign.id) || { sentCount: 0, lastSentAt: null },
       }))
     }
 

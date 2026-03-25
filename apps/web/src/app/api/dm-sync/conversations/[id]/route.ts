@@ -7,23 +7,23 @@ export const dynamic = 'force-dynamic'
 interface ConversationMessage {
   id: string
   direction: 'inbound' | 'outbound'
-  message_text: string | null
-  sender_name: string | null
+  messageText: string | null
+  senderName: string | null
   status: 'synced' | 'pending' | 'failed'
-  created_at: string
+  createdAt: string
 }
 
 interface ConversationParticipant {
-  skool_user_id: string
-  display_name: string | null
+  skoolUserId: string
+  displayName: string | null
   username: string | null
-  ghl_contact_id: string | null
+  ghlContactId: string | null
 }
 
 interface ConversationDetail {
   id: string
   participant: ConversationParticipant
-  message_count: number
+  messageCount: number
 }
 
 interface ConversationDetailResponse {
@@ -130,20 +130,20 @@ export async function GET(
     const senderName = inboundWithName?.senderName || anyWithName?.senderName || null
 
     const participant: ConversationParticipant = {
-      skool_user_id: participantUserId,
-      display_name: mapping?.skoolDisplayName || member?.displayName || syncStatusName || senderName || null,
+      skoolUserId: participantUserId,
+      displayName: mapping?.skoolDisplayName || member?.displayName || syncStatusName || senderName || null,
       username: mapping?.skoolUsername || member?.skoolUsername || null,
-      ghl_contact_id: mapping?.ghlContactId || null,
+      ghlContactId: mapping?.ghlContactId || null,
     }
 
     // Format messages for response
     const formattedMessages: ConversationMessage[] = actualMessages.map((msg) => ({
       id: msg.id,
       direction: msg.direction as 'inbound' | 'outbound',
-      message_text: msg.messageText,
-      sender_name: msg.senderName,
+      messageText: msg.messageText,
+      senderName: msg.senderName,
       status: msg.status as 'synced' | 'pending' | 'failed',
-      created_at: msg.createdAt?.toISOString() || new Date().toISOString(),
+      createdAt: msg.createdAt?.toISOString() || new Date().toISOString(),
     }))
 
     // Get oldest timestamp for pagination (first item when sorted oldest-first)
@@ -155,7 +155,7 @@ export async function GET(
       conversation: {
         id: conversationId,
         participant,
-        message_count: actualMessages.length,
+        messageCount: actualMessages.length,
       },
       messages: formattedMessages,
       pagination: {

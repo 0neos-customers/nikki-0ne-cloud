@@ -6,20 +6,20 @@ export const dynamic = 'force-dynamic'
 
 interface RawMessage {
   id: string
-  skool_conversation_id: string
-  skool_message_id: string
-  skool_user_id: string
-  sender_name: string | null
-  skool_username: string | null
+  skoolConversationId: string
+  skoolMessageId: string
+  skoolUserId: string
+  senderName: string | null
+  skoolUsername: string | null
   direction: 'inbound' | 'outbound'
-  message_text: string | null
+  messageText: string | null
   status: 'synced' | 'pending' | 'failed'
-  ghl_message_id: string | null
-  ghl_contact_id: string | null
-  ghl_location_id: string | null
-  skool_community_slug: string | null
-  created_at: string
-  synced_at: string | null
+  ghlMessageId: string | null
+  ghlContactId: string | null
+  ghlLocationId: string | null
+  skoolCommunitySlug: string | null
+  createdAt: string
+  syncedAt: string | null
 }
 
 interface RawMessagesResponse {
@@ -146,20 +146,20 @@ export async function GET(request: NextRequest) {
 
         return {
           id: msg.id,
-          skool_conversation_id: msg.skoolConversationId || '',
-          skool_message_id: msg.skoolMessageId || '',
-          skool_user_id: msg.skoolUserId || '',
-          sender_name: msg.senderName,
-          skool_username: mapping?.skoolUsername || null,
+          skoolConversationId: msg.skoolConversationId || '',
+          skoolMessageId: msg.skoolMessageId || '',
+          skoolUserId: msg.skoolUserId || '',
+          senderName: msg.senderName,
+          skoolUsername: mapping?.skoolUsername || null,
           direction: msg.direction as 'inbound' | 'outbound',
-          message_text: msg.messageText,
+          messageText: msg.messageText,
           status: msg.status as 'synced' | 'pending' | 'failed',
-          ghl_message_id: msg.ghlMessageId,
-          ghl_contact_id: mapping?.ghlContactId || null,
-          ghl_location_id: config?.ghlLocationId || null,
-          skool_community_slug: config?.skoolCommunitySlug || null,
-          created_at: msg.createdAt?.toISOString() || new Date().toISOString(),
-          synced_at: msg.syncedAt?.toISOString() || null,
+          ghlMessageId: msg.ghlMessageId,
+          ghlContactId: mapping?.ghlContactId || null,
+          ghlLocationId: config?.ghlLocationId || null,
+          skoolCommunitySlug: config?.skoolCommunitySlug || null,
+          createdAt: msg.createdAt?.toISOString() || new Date().toISOString(),
+          syncedAt: msg.syncedAt?.toISOString() || null,
         }
       })
 
