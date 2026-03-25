@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createServerClient } from '@0ne/db/server'
+import { db, eq, and } from '@0ne/db/server'
+import { dmMessages } from '@0ne/db/server'
 
 export const dynamic = 'force-dynamic'
 
@@ -31,7 +32,6 @@ export async function POST(
 ) {
   try {
     const { id: conversationId } = await params
-    const supabase = createServerClient()
     const body = await request.json() as SendMessageRequest
 
     const { message, staffSkoolId } = body
@@ -59,13 +59,15 @@ export async function POST(
     }
 
     // Get the participant's skool_user_id from an existing message in this conversation
-    const { data: existingMessage } = await supabase
-      .from('dm_messages')
-      .select('skool_user_id, clerk_user_id')
-      .eq('skool_conversation_id', conversationId)
-      .eq('direction', 'inbound')
+    const [existingMessage] = await db.select({
+      skoolUserId: dmMessages.skoolUserId,
+      clerkUserId: dmMessages.clerkUserId,
+    }).from(dmMessages)
+      .where(and(
+        eq(dmMessages.skoolConversationId, conversationId),
+        eq(dmMessages.direction, 'inbound')
+      ))
       .limit(1)
-      .single()
 
     if (!existingMessage) {
       return NextResponse.json(
@@ -79,42 +81,38 @@ export async function POST(
     const syntheticMessageId = `inbox-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`
 
     // Insert the outbound message as pending
-    const { data: newMessage, error: insertError } = await supabase
-      .from('dm_messages')
-      .insert({
-        clerk_user_id: existingMessage.clerk_user_id,
-        skool_conversation_id: conversationId,
-        skool_message_id: syntheticMessageId,
-        skool_user_id: existingMessage.skool_user_id, // The recipient
+    try {
+      const [newMessage] = await db.insert(dmMessages).values({
+        clerkUserId: existingMessage.clerkUserId,
+        skoolConversationId: conversationId,
+        skoolMessageId: syntheticMessageId,
+        skoolUserId: existingMessage.skoolUserId, // The recipient
         direction: 'outbound',
-        message_text: message.trim(),
+        messageText: message.trim(),
         status: 'pending',
-        staff_skool_id: staffSkoolId,
+        staffSkoolId: staffSkoolId,
         source: 'manual',
-        created_at: new Date().toISOString(),
-      })
-      .select('id')
-      .single()
+        createdAt: new Date(),
+      }).returning({ id: dmMessages.id })
 
-    if (insertError) {
+      console.log('[Send Message API] Queued message:', {
+        messageId: newMessage.id,
+        conversationId,
+        syntheticMessageId,
+      })
+
+      return NextResponse.json({
+        success: true,
+        messageId: newMessage.id,
+        status: 'pending',
+      } as SendMessageResponse)
+    } catch (insertError) {
       console.error('[Send Message API] INSERT error:', insertError)
       return NextResponse.json(
-        { error: 'Failed to queue message', details: insertError.message },
+        { error: 'Failed to queue message', details: String(insertError) },
         { status: 500 }
       )
     }
-
-    console.log('[Send Message API] Queued message:', {
-      messageId: newMessage.id,
-      conversationId,
-      syntheticMessageId,
-    })
-
-    return NextResponse.json({
-      success: true,
-      messageId: newMessage.id,
-      status: 'pending',
-    } as SendMessageResponse)
   } catch (error) {
     console.error('[Send Message API] POST exception:', error)
     return NextResponse.json(

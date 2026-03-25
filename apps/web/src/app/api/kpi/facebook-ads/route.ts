@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { auth } from '@clerk/nextjs/server'
-import { createServerClient } from '@0ne/db/server'
-import { sanitizeForPostgrestFilter } from '@/lib/postgrest-utils'
+import { db, eq, gte, lte, and, or, inArray } from '@0ne/db/server'
+import { adMetrics, metaAccountDaily, campaigns } from '@0ne/db/server'
 
 export const dynamic = 'force-dynamic'
 
@@ -86,127 +86,83 @@ export async function GET(request: Request) {
     const period = searchParams.get('period') || 'mtd'
     const { startDate, endDate } = parseDateRange(searchParams)
 
-    const supabase = createServerClient()
-
-    const query = supabase
-      .from('ad_metrics')
-      .select([
-        'date',
-        'spend',
-        'impressions',
-        'clicks',
-        'reach',
-        'frequency',
-        'unique_clicks',
-        'link_clicks',
-        'landing_page_views',
-        'completed_registrations',
-        'conversions',
-        'cost_per_conversion',
-        'roas',
-        'cpm',
-        'cpc',
-        'ctr',
-        'campaign_id',
-        'campaign_meta_id',
-        'campaign_name',
-        'adset_id',
-        'adset_name',
-        'ad_id',
-        'ad_name',
-      ].join(','))
-      .eq('platform', 'meta')
-      .gte('date', startDate)
-      .lte('date', endDate)
-
     const campaignIds = campaignsParam ? campaignsParam.split(',').filter(Boolean) : []
     const adsetIds = adsetsParam ? adsetsParam.split(',').filter(Boolean) : []
     const adIds = adsParam ? adsParam.split(',').filter(Boolean) : []
 
+    // Build filter conditions
+    const filters = [
+      eq(adMetrics.platform, 'meta'),
+      gte(adMetrics.date, startDate),
+      lte(adMetrics.date, endDate),
+    ]
+
     if (campaignIds.length > 0) {
-      const campaignMetaIds = campaignIds.filter((id) => /^\d+$/.test(id)).map(sanitizeForPostgrestFilter)
-      const campaignUuidIds = campaignIds.filter((id) => !/^\d+$/.test(id)).map(sanitizeForPostgrestFilter)
+      const campaignMetaIds = campaignIds.filter((id) => /^\d+$/.test(id))
+      const campaignUuidIds = campaignIds.filter((id) => !/^\d+$/.test(id))
 
       if (campaignMetaIds.length > 0 && campaignUuidIds.length > 0) {
-        query.or(
-          `campaign_meta_id.in.(${campaignMetaIds.join(',')}),campaign_id.in.(${campaignUuidIds.join(',')})`
+        filters.push(
+          or(
+            inArray(adMetrics.campaignMetaId, campaignMetaIds),
+            inArray(adMetrics.campaignId, campaignUuidIds),
+          )!
         )
       } else if (campaignMetaIds.length > 0) {
-        query.in('campaign_meta_id', campaignMetaIds)
+        filters.push(inArray(adMetrics.campaignMetaId, campaignMetaIds))
       } else if (campaignUuidIds.length > 0) {
-        query.in('campaign_id', campaignUuidIds)
+        filters.push(inArray(adMetrics.campaignId, campaignUuidIds))
       }
     } else if (campaignId && campaignId !== 'all') {
-      query.eq('campaign_id', campaignId)
+      filters.push(eq(adMetrics.campaignId, campaignId))
     }
     if (adsetIds.length > 0) {
-      query.in('adset_id', adsetIds)
+      filters.push(inArray(adMetrics.adsetId, adsetIds))
     } else if (adsetId && adsetId !== 'all') {
-      query.eq('adset_id', adsetId)
+      filters.push(eq(adMetrics.adsetId, adsetId))
     }
     if (adIds.length > 0) {
-      query.in('ad_id', adIds)
+      filters.push(inArray(adMetrics.adId, adIds))
     } else if (adId && adId !== 'all') {
-      query.eq('ad_id', adId)
+      filters.push(eq(adMetrics.adId, adId))
     }
 
-    let { data: rows, error } = await query
-    let usedLegacyColumns = false
+    const rows = await db
+      .select()
+      .from(adMetrics)
+      .where(and(...filters))
 
-    if (error) {
-      const message = error.message || ''
-      const isMissingColumn = message.includes('column') && message.includes('does not exist')
-      if (!isMissingColumn) {
-        throw error
-      }
-
-      usedLegacyColumns = true
-      const legacyQuery = supabase
-        .from('ad_metrics')
-        .select([
-          'date',
-          'spend',
-          'impressions',
-          'clicks',
-          'cpm',
-          'cpc',
-          'ctr',
-          'campaign_id',
-        ].join(','))
-        .eq('platform', 'meta')
-        .gte('date', startDate)
-        .lte('date', endDate)
-
-      if (campaignId && campaignId !== 'all') {
-        legacyQuery.eq('campaign_id', campaignId)
-      }
-
-      const { data: legacyRows, error: legacyError } = await legacyQuery
-
-      if (legacyError) {
-        throw legacyError
-      }
-
-      rows = legacyRows
-    }
+    const usedLegacyColumns = false
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const safeRows = (rows || []) as unknown as Record<string, unknown>[]
+    const safeRows = rows as unknown as Record<string, unknown>[]
 
-    const { data: accountDaily } = await supabase
-      .from('meta_account_daily')
-      .select('date, reach, frequency, unique_clicks, impressions, clicks, spend')
-      .eq('platform', 'meta')
-      .gte('date', startDate)
-      .lte('date', endDate)
+    const accountDaily = await db
+      .select({
+        date: metaAccountDaily.date,
+        reach: metaAccountDaily.reach,
+        frequency: metaAccountDaily.frequency,
+        uniqueClicks: metaAccountDaily.uniqueClicks,
+        impressions: metaAccountDaily.impressions,
+        clicks: metaAccountDaily.clicks,
+        spend: metaAccountDaily.spend,
+      })
+      .from(metaAccountDaily)
+      .where(
+        and(
+          eq(metaAccountDaily.platform, 'meta'),
+          gte(metaAccountDaily.date, startDate),
+          lte(metaAccountDaily.date, endDate),
+        )
+      )
 
     const accountDailyMap = new Map(
-      (accountDaily || []).map((row) => [
+      accountDaily.map((row) => [
         row.date as string,
         {
           reach: Number(row.reach) || 0,
           frequency: Number(row.frequency) || 0,
-          uniqueClicks: Number(row.unique_clicks) || 0,
+          uniqueClicks: Number(row.uniqueClicks) || 0,
           impressions: Number(row.impressions) || 0,
           clicks: Number(row.clicks) || 0,
           spend: Number(row.spend) || 0,
@@ -214,9 +170,7 @@ export async function GET(request: Request) {
       ])
     )
 
-    const accountImpressionsTotal = accountDaily
-      ? accountDaily.reduce((sum, row) => sum + (Number(row.impressions) || 0), 0)
-      : 0
+    const accountImpressionsTotal = accountDaily.reduce((sum, row) => sum + (Number(row.impressions) || 0), 0)
 
     const dailyMap = new Map<string, Record<string, number>>()
 
@@ -378,11 +332,11 @@ export async function GET(request: Request) {
     }
 
     const campaignIdsFromRows = [...new Set(safeRows.map((row) => row.campaign_id).filter(Boolean))] as string[]
-    const { data: campaignsFromDb } = campaignIdsFromRows.length > 0
-      ? await supabase.from('campaigns').select('id, name').in('id', campaignIdsFromRows)
-      : { data: [] }
+    const campaignsFromDb = campaignIdsFromRows.length > 0
+      ? await db.select({ id: campaigns.id, name: campaigns.name }).from(campaigns).where(inArray(campaigns.id, campaignIdsFromRows))
+      : []
 
-    ;(campaignsFromDb || []).forEach((campaign) => {
+    campaignsFromDb.forEach((campaign) => {
       if (!campaignMap.has(campaign.id)) {
         campaignMap.set(campaign.id, campaign)
       }

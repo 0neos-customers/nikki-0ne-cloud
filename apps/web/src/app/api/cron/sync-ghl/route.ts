@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@0ne/db/server'
+import { db } from '@0ne/db/server'
+import { contacts } from '@0ne/db/server'
 import { GHLClient } from '@/features/kpi/lib/ghl-client'
 import {
   TAG_MAPPINGS,
@@ -27,16 +28,15 @@ export async function GET(request: Request) {
   await syncLog.start({ mode: fullSync ? 'full' : 'incremental', maxContacts })
 
   try {
-    const supabase = createServerClient()
     const ghl = new GHLClient()
 
     // Full sync: get ALL contacts; Regular sync: last 2 hours
-    let contacts
+    let allContacts
     if (fullSync) {
-      contacts = await ghl.getAllContacts(100, maxContacts)
+      allContacts = await ghl.getAllContacts(100, maxContacts)
     } else {
       const since = new Date(Date.now() - 2 * 60 * 60 * 1000)
-      contacts = await ghl.getContactsUpdatedSince(since)
+      allContacts = await ghl.getContactsUpdatedSince(since)
     }
 
     let synced = 0
@@ -46,20 +46,20 @@ export async function GET(request: Request) {
     // Batch process for efficiency
     const BATCH_SIZE = 50
     const contactsToUpsert: Array<{
-      ghl_contact_id: string
+      ghlContactId: string
       email: string | null
       phone: string | null
-      first_name: string | null
-      last_name: string | null
-      current_stage: string
-      stages: string[] // All stages this contact has tags for
-      credit_status: string
-      lead_age: number
-      client_age: number
-      updated_at: string
+      firstName: string | null
+      lastName: string | null
+      currentStage: string
+      stages: string[]
+      creditStatus: string
+      leadAge: number
+      clientAge: number
+      updatedAt: Date
     }> = []
 
-    for (const contact of contacts) {
+    for (const contact of allContacts) {
       try {
         const tags = (contact.tags || []).map((t) => t.toLowerCase())
         // Get ALL stages this contact has tags for (tags accumulate)
@@ -99,40 +99,55 @@ export async function GET(request: Request) {
         const clientAge = ghl.getCustomFieldValue(contact, CUSTOM_FIELD_KEYS.clientAge) as number
 
         contactsToUpsert.push({
-          ghl_contact_id: contact.id,
+          ghlContactId: contact.id,
           email: contact.email || null,
           phone: contact.phone || null,
-          first_name: contact.firstName || null,
-          last_name: contact.lastName || null,
-          current_stage: effectiveStage!, // Primary stage (furthest in funnel, or 'member' for Skool-only)
-          stages: effectiveStages, // ALL stages for accurate counting
-          credit_status: creditStatus,
-          lead_age: leadAge || 0,
-          client_age: clientAge || 0,
-          updated_at: new Date().toISOString(),
+          firstName: contact.firstName || null,
+          lastName: contact.lastName || null,
+          currentStage: effectiveStage!,
+          stages: effectiveStages,
+          creditStatus: creditStatus,
+          leadAge: leadAge || 0,
+          clientAge: clientAge || 0,
+          updatedAt: new Date(),
         })
 
         // Batch upsert every BATCH_SIZE contacts
         if (contactsToUpsert.length >= BATCH_SIZE) {
           const batchToInsert = [...contactsToUpsert] // Copy for debugging
-          const { data, error: batchError } = await supabase
-            .from('contacts')
-            .upsert(contactsToUpsert, { onConflict: 'ghl_contact_id' })
-            .select('id')
+          try {
+            const data = await db
+              .insert(contacts)
+              .values(contactsToUpsert)
+              .onConflictDoUpdate({
+                target: [contacts.ghlContactId],
+                set: {
+                  email: contacts.email,
+                  phone: contacts.phone,
+                  firstName: contacts.firstName,
+                  lastName: contacts.lastName,
+                  currentStage: contacts.currentStage,
+                  stages: contacts.stages,
+                  creditStatus: contacts.creditStatus,
+                  leadAge: contacts.leadAge,
+                  clientAge: contacts.clientAge,
+                  updatedAt: new Date(),
+                },
+              })
+              .returning({ id: contacts.id })
 
-          if (batchError) {
-            console.error('Batch upsert error:', batchError, 'First contact in batch:', batchToInsert[0]?.ghl_contact_id)
-            errors += contactsToUpsert.length
-          } else {
-            const insertedCount = data?.length || 0
+            const insertedCount = data.length
             synced += insertedCount
             console.log(`Batch upserted: ${insertedCount}/${batchToInsert.length}`)
+          } catch (batchError) {
+            console.error('Batch upsert error:', batchError, 'First contact in batch:', batchToInsert[0]?.ghlContactId)
+            errors += contactsToUpsert.length
           }
           contactsToUpsert.length = 0 // Clear batch
 
           // Log progress for large syncs
           if (fullSync && synced % 500 === 0) {
-            console.log(`Sync progress: ${synced}/${contacts.length}`)
+            console.log(`Sync progress: ${synced}/${allContacts.length}`)
           }
         }
       } catch (contactError) {
@@ -143,30 +158,45 @@ export async function GET(request: Request) {
 
     // Upsert remaining contacts
     if (contactsToUpsert.length > 0) {
-      const { data, error: batchError } = await supabase
-        .from('contacts')
-        .upsert(contactsToUpsert, { onConflict: 'ghl_contact_id' })
-        .select('id')
+      try {
+        const data = await db
+          .insert(contacts)
+          .values(contactsToUpsert)
+          .onConflictDoUpdate({
+            target: [contacts.ghlContactId],
+            set: {
+              email: contacts.email,
+              phone: contacts.phone,
+              firstName: contacts.firstName,
+              lastName: contacts.lastName,
+              currentStage: contacts.currentStage,
+              stages: contacts.stages,
+              creditStatus: contacts.creditStatus,
+              leadAge: contacts.leadAge,
+              clientAge: contacts.clientAge,
+              updatedAt: new Date(),
+            },
+          })
+          .returning({ id: contacts.id })
 
-      if (batchError) {
-        console.error('Final batch upsert error:', batchError)
-        errors += contactsToUpsert.length
-      } else {
-        const insertedCount = data?.length || 0
+        const insertedCount = data.length
         synced += insertedCount
         console.log(`Final batch upserted: ${insertedCount}/${contactsToUpsert.length}`)
+      } catch (batchError) {
+        console.error('Final batch upsert error:', batchError)
+        errors += contactsToUpsert.length
       }
     }
 
     // Complete sync logging
-    await syncLog.complete(synced, { skipped, errors, total: contacts.length })
+    await syncLog.complete(synced, { skipped, errors, total: allContacts.length })
 
     return NextResponse.json({
       success: true,
       synced,
       skipped,
       errors,
-      total: contacts.length,
+      total: allContacts.length,
       mode: fullSync ? 'full' : 'incremental',
       timestamp: new Date().toISOString(),
     })

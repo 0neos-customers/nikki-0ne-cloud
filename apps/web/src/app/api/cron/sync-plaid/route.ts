@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@0ne/db/server'
+import { db, eq } from '@0ne/db/server'
+import { plaidItems, plaidAccounts, plaidTransactions, plaidCategoryMappings } from '@0ne/db/server'
 import { syncTransactions } from '@/lib/plaid-client'
 import { decryptAccessToken } from '@/lib/plaid-encryption'
 
@@ -12,15 +13,18 @@ export async function GET(request: Request) {
   }
 
   try {
-    const supabase = createServerClient()
-
     // Get all active items
-    const { data: items, error: itemsError } = await supabase
-      .from('plaid_items')
-      .select('id, item_id, access_token, transaction_cursor')
-      .eq('status', 'active')
+    const items = await db
+      .select({
+        id: plaidItems.id,
+        itemId: plaidItems.itemId,
+        accessToken: plaidItems.accessToken,
+        transactionCursor: plaidItems.transactionCursor,
+      })
+      .from(plaidItems)
+      .where(eq(plaidItems.status, 'active'))
 
-    if (itemsError || !items || items.length === 0) {
+    if (items.length === 0) {
       return NextResponse.json({
         success: true,
         message: 'No active items to sync',
@@ -30,17 +34,21 @@ export async function GET(request: Request) {
     }
 
     // Get category mappings
-    const { data: mappings } = await supabase
-      .from('plaid_category_mappings')
-      .select('plaid_primary, plaid_detailed, expense_category_slug')
+    const mappings = await db
+      .select({
+        plaidPrimary: plaidCategoryMappings.plaidPrimary,
+        plaidDetailed: plaidCategoryMappings.plaidDetailed,
+        expenseCategorySlug: plaidCategoryMappings.expenseCategorySlug,
+      })
+      .from(plaidCategoryMappings)
 
     const mappingLookup = new Map<string, string>()
-    mappings?.forEach((m) => {
-      if (m.plaid_detailed) {
-        mappingLookup.set(`${m.plaid_primary}:${m.plaid_detailed}`, m.expense_category_slug)
+    mappings.forEach((m) => {
+      if (m.plaidDetailed && m.expenseCategorySlug) {
+        mappingLookup.set(`${m.plaidPrimary}:${m.plaidDetailed}`, m.expenseCategorySlug)
       }
-      if (!mappingLookup.has(m.plaid_primary)) {
-        mappingLookup.set(m.plaid_primary, m.expense_category_slug)
+      if (!mappingLookup.has(m.plaidPrimary) && m.expenseCategorySlug) {
+        mappingLookup.set(m.plaidPrimary, m.expenseCategorySlug)
       }
     })
 
@@ -49,20 +57,20 @@ export async function GET(request: Request) {
 
     for (const item of items) {
       try {
-        const accessToken = decryptAccessToken(item.access_token)
+        const decryptedToken = decryptAccessToken(item.accessToken)
         const { added, modified, removed, cursor } = await syncTransactions(
-          accessToken,
-          item.transaction_cursor
+          decryptedToken,
+          item.transactionCursor
         )
 
         // Get account mapping
-        const { data: accounts } = await supabase
-          .from('plaid_accounts')
-          .select('id, account_id')
-          .eq('item_id', item.id)
+        const accounts = await db
+          .select({ id: plaidAccounts.id, accountId: plaidAccounts.accountId })
+          .from(plaidAccounts)
+          .where(eq(plaidAccounts.itemId, item.id))
 
         const accountMap = new Map<string, string>()
-        accounts?.forEach((a) => accountMap.set(a.account_id, a.id))
+        accounts.forEach((a) => accountMap.set(a.accountId, a.id))
 
         // Process added
         for (const txn of added) {
@@ -80,24 +88,44 @@ export async function GET(request: Request) {
             mappedCategory = mappingLookup.get(primary) || null
           }
 
-          const { error: txnError } = await supabase
-            .from('plaid_transactions')
-            .upsert({
-              transaction_id: txn.transaction_id,
-              account_id: ourAccountId,
-              amount: txn.amount,
+          try {
+            const record = {
+              transactionId: txn.transaction_id,
+              accountId: ourAccountId,
+              amount: String(txn.amount),
               date: txn.date,
               name: txn.name || null,
-              merchant_name: txn.merchant_name || null,
+              merchantName: txn.merchant_name || null,
               category: txn.category || [],
-              personal_finance_category_primary: primary,
-              personal_finance_category_detailed: detailed,
-              mapped_category: mappedCategory,
-              is_pending: txn.pending || false,
-            }, { onConflict: 'transaction_id' })
+              personalFinanceCategoryPrimary: primary,
+              personalFinanceCategoryDetailed: detailed,
+              mappedCategory: mappedCategory,
+              isPending: txn.pending || false,
+            }
 
-          if (txnError) continue
-          totalSynced++
+            await db
+              .insert(plaidTransactions)
+              .values(record)
+              .onConflictDoUpdate({
+                target: [plaidTransactions.transactionId],
+                set: {
+                  accountId: record.accountId,
+                  amount: record.amount,
+                  date: record.date,
+                  name: record.name,
+                  merchantName: record.merchantName,
+                  category: record.category,
+                  personalFinanceCategoryPrimary: record.personalFinanceCategoryPrimary,
+                  personalFinanceCategoryDetailed: record.personalFinanceCategoryDetailed,
+                  mappedCategory: record.mappedCategory,
+                  isPending: record.isPending,
+                },
+              })
+
+            totalSynced++
+          } catch {
+            continue
+          }
         }
 
         // Process modified
@@ -111,35 +139,34 @@ export async function GET(request: Request) {
           if (primary && detailed) mappedCategory = mappingLookup.get(`${primary}:${detailed}`) || null
           if (!mappedCategory && primary) mappedCategory = mappingLookup.get(primary) || null
 
-          await supabase
-            .from('plaid_transactions')
-            .update({
-              amount: txn.amount,
+          await db
+            .update(plaidTransactions)
+            .set({
+              amount: String(txn.amount),
               date: txn.date,
               name: txn.name || null,
-              merchant_name: txn.merchant_name || null,
-              mapped_category: mappedCategory,
-              is_pending: txn.pending || false,
+              merchantName: txn.merchant_name || null,
+              mappedCategory: mappedCategory,
+              isPending: txn.pending || false,
             })
-            .eq('transaction_id', txn.transaction_id)
+            .where(eq(plaidTransactions.transactionId, txn.transaction_id))
         }
 
         // Process removed
         for (const txn of removed) {
-          await supabase
-            .from('plaid_transactions')
-            .delete()
-            .eq('transaction_id', txn.transaction_id)
+          await db
+            .delete(plaidTransactions)
+            .where(eq(plaidTransactions.transactionId, txn.transaction_id))
         }
 
         // Update cursor
-        await supabase
-          .from('plaid_items')
-          .update({
-            transaction_cursor: cursor,
-            last_synced_at: new Date().toISOString(),
+        await db
+          .update(plaidItems)
+          .set({
+            transactionCursor: cursor,
+            lastSyncedAt: new Date(),
           })
-          .eq('id', item.id)
+          .where(eq(plaidItems.id, item.id))
 
       } catch (itemError) {
         console.error(`Cron: Error syncing item ${item.id}:`, itemError)

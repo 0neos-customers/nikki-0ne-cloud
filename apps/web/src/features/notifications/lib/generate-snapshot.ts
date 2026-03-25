@@ -5,7 +5,8 @@
  * for email and SMS notifications.
  */
 
-import { createServerClient } from '@0ne/db/server'
+import { db, eq, gte, lte, and, count, ilike } from '@0ne/db/server'
+import { ghlTransactions, contacts, skoolMembers, adMetrics } from '@0ne/db/server'
 import type { MetricsConfig } from '@0ne/db/types/notifications'
 import {
   getLatestRevenueSnapshot,
@@ -73,13 +74,9 @@ async function fetchRevenueMetrics(): Promise<{
   oneTime: number
   change: number
 }> {
-  const supabase = createServerClient()
-
   // Get current month dates
   const now = new Date()
   const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1)
-    .toISOString()
-    .split('T')[0]
   const today = now.toISOString().split('T')[0]
 
   // Get recurring from Skool
@@ -87,7 +84,6 @@ async function fetchRevenueMetrics(): Promise<{
   const recurringCurrent = latestSnapshot?.mrr || 0
 
   // Get previous month for comparison
-  const previousMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1)
   const previousMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0)
     .toISOString()
     .split('T')[0]
@@ -98,15 +94,16 @@ async function fetchRevenueMetrics(): Promise<{
   )
 
   // Get one-time from GHL transactions
-  const { data: currentTransactions } = await supabase
-    .from('ghl_transactions')
-    .select('amount')
-    .eq('status', 'succeeded')
-    .gte('transaction_date', startOfMonth)
-    .lte('transaction_date', `${today}T23:59:59`)
+  const currentTransactions = await db.select({ amount: ghlTransactions.amount })
+    .from(ghlTransactions)
+    .where(and(
+      eq(ghlTransactions.status, 'succeeded'),
+      gte(ghlTransactions.transactionDate, startOfMonth),
+      lte(ghlTransactions.transactionDate, new Date(`${today}T23:59:59`))
+    ))
 
   const oneTimeCurrent =
-    currentTransactions?.reduce((sum, t) => sum + Number(t.amount), 0) || 0
+    currentTransactions.reduce((sum, t) => sum + Number(t.amount), 0) || 0
 
   return {
     total: recurringCurrent + oneTimeCurrent,
@@ -120,35 +117,25 @@ async function fetchLeadsMetrics(): Promise<{
   count: number
   change: number
 }> {
-  const supabase = createServerClient()
-
   // Count contacts created this month
   const now = new Date()
   const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1)
-    .toISOString()
-    .split('T')[0]
 
-  const { count: currentCount } = await supabase
-    .from('contacts')
-    .select('*', { count: 'exact', head: true })
-    .gte('created_at', startOfMonth)
+  const [{ count: currentCount }] = await db.select({ count: count() }).from(contacts)
+    .where(gte(contacts.createdAt, startOfMonth))
 
   // Previous month for comparison
   const startOfPrevMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1)
-    .toISOString()
-    .split('T')[0]
-  const endOfPrevMonth = new Date(now.getFullYear(), now.getMonth(), 0)
-    .toISOString()
-    .split('T')[0]
+  const endOfPrevMonth = new Date(`${new Date(now.getFullYear(), now.getMonth(), 0).toISOString().split('T')[0]}T23:59:59`)
 
-  const { count: prevCount } = await supabase
-    .from('contacts')
-    .select('*', { count: 'exact', head: true })
-    .gte('created_at', startOfPrevMonth)
-    .lte('created_at', `${endOfPrevMonth}T23:59:59`)
+  const [{ count: prevCount }] = await db.select({ count: count() }).from(contacts)
+    .where(and(
+      gte(contacts.createdAt, startOfPrevMonth),
+      lte(contacts.createdAt, endOfPrevMonth)
+    ))
 
-  const current = currentCount || 0
-  const previous = prevCount || 0
+  const current = Number(currentCount || 0)
+  const previous = Number(prevCount || 0)
   const change = previous > 0 ? ((current - previous) / previous) * 100 : 0
 
   return { count: current, change }
@@ -159,23 +146,16 @@ async function fetchClientsMetrics(): Promise<{
   vip: number
   premium: number
 }> {
-  const supabase = createServerClient()
+  const [{ count: vipCount }] = await db.select({ count: count() }).from(contacts)
+    .where(eq(contacts.currentStage, 'vip'))
 
-  // Count VIP and Premium clients
-  const { count: vipCount } = await supabase
-    .from('contacts')
-    .select('*', { count: 'exact', head: true })
-    .eq('current_stage', 'vip')
-
-  const { count: premiumCount } = await supabase
-    .from('contacts')
-    .select('*', { count: 'exact', head: true })
-    .eq('current_stage', 'premium')
+  const [{ count: premiumCount }] = await db.select({ count: count() }).from(contacts)
+    .where(eq(contacts.currentStage, 'premium'))
 
   return {
-    count: (vipCount || 0) + (premiumCount || 0),
-    vip: vipCount || 0,
-    premium: premiumCount || 0,
+    count: Number(vipCount || 0) + Number(premiumCount || 0),
+    vip: Number(vipCount || 0),
+    premium: Number(premiumCount || 0),
   }
 }
 
@@ -187,14 +167,11 @@ async function fetchSkoolMetrics(): Promise<{
 }> {
   const latestSnapshot = await getLatestRevenueSnapshot('fruitful')
 
-  const supabase = createServerClient()
-  const { count: totalMembers } = await supabase
-    .from('skool_members')
-    .select('*', { count: 'exact', head: true })
-    .eq('group_slug', 'fruitful')
+  const [{ count: totalMembers }] = await db.select({ count: count() }).from(skoolMembers)
+    .where(eq(skoolMembers.groupSlug, 'fruitful'))
 
   const payingMembers = latestSnapshot?.paying_members || 0
-  const members = totalMembers || 0
+  const members = Number(totalMembers || 0)
 
   return {
     members,
@@ -210,27 +187,24 @@ async function fetchFundedAmount(): Promise<{
 }> {
   // This would need to be implemented based on your funding tracking
   // For now, returning placeholder based on GHL transactions
-  const supabase = createServerClient()
-
-  const { data: fundingTransactions } = await supabase
-    .from('ghl_transactions')
-    .select('amount')
-    .eq('status', 'succeeded')
-    .ilike('entity_source_name', '%funding%')
+  const fundingTransactions = await db.select({ amount: ghlTransactions.amount })
+    .from(ghlTransactions)
+    .where(and(
+      eq(ghlTransactions.status, 'succeeded'),
+      ilike(ghlTransactions.entitySourceName, '%funding%')
+    ))
 
   const amount =
-    fundingTransactions?.reduce((sum, t) => sum + Number(t.amount), 0) || 0
-  const count = fundingTransactions?.length || 0
+    fundingTransactions.reduce((sum, t) => sum + Number(t.amount), 0) || 0
+  const txCount = fundingTransactions.length
 
-  return { amount, count }
+  return { amount, count: txCount }
 }
 
 async function fetchAdSpend(): Promise<{
   spend: number
   costPerLead: number
 }> {
-  const supabase = createServerClient()
-
   // Get current month dates
   const now = new Date()
   const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1)
@@ -239,14 +213,15 @@ async function fetchAdSpend(): Promise<{
   const today = now.toISOString().split('T')[0]
 
   // Aggregate ad spend from ad_metrics table (MTD)
-  const { data: adMetrics } = await supabase
-    .from('ad_metrics')
-    .select('spend')
-    .gte('date', startOfMonth)
-    .lte('date', today)
+  const adMetricsData = await db.select({ spend: adMetrics.spend })
+    .from(adMetrics)
+    .where(and(
+      gte(adMetrics.date, startOfMonth),
+      lte(adMetrics.date, today)
+    ))
 
   const totalSpend =
-    adMetrics?.reduce((sum, m) => sum + Number(m.spend || 0), 0) || 0
+    adMetricsData.reduce((sum, m) => sum + Number(m.spend || 0), 0) || 0
 
   // Get leads count for cost per lead calculation
   const leads = await fetchLeadsMetrics()

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { auth } from '@clerk/nextjs/server'
-import { createServerClient } from '@0ne/db/server'
+import { db, eq, desc } from '@0ne/db/server'
+import { events, contacts } from '@0ne/db/server'
 import { STAGE_LABELS } from '@/features/kpi/lib/config'
 
 export const dynamic = 'force-dynamic'
@@ -43,90 +44,82 @@ export async function GET(request: Request) {
 
   try {
     const { searchParams } = new URL(request.url)
-    const limit = parseInt(searchParams.get('limit') || '10', 10)
+    const limitParam = parseInt(searchParams.get('limit') || '10', 10)
 
-    const supabase = createServerClient()
+    // Query recent stage change events with contact details via left join
+    try {
+      const rows = await db
+        .select({
+          id: events.id,
+          eventType: events.eventType,
+          eventData: events.eventData,
+          source: events.source,
+          createdAt: events.createdAt,
+          contactId: contacts.id,
+          contactFirstName: contacts.firstName,
+          contactLastName: contacts.lastName,
+          contactSource: contacts.source,
+        })
+        .from(events)
+        .leftJoin(contacts, eq(events.contactId, contacts.id))
+        .where(eq(events.eventType, 'stage_changed'))
+        .orderBy(desc(events.createdAt))
+        .limit(limitParam)
 
-    // Query recent stage change events with contact details
-    // Join events with contacts to get name and source
-    const { data: events, error } = await supabase
-      .from('events')
-      .select(`
-        id,
-        event_type,
-        event_data,
-        source,
-        created_at,
-        contact:contacts!contact_id (
-          id,
-          first_name,
-          last_name,
-          source
-        )
-      `)
-      .eq('event_type', 'stage_changed')
-      .order('created_at', { ascending: false })
-      .limit(limit)
+      const activity: RecentActivityItem[] = rows.map((row) => {
+        const name = [row.contactFirstName, row.contactLastName].filter(Boolean).join(' ') || 'Unknown'
 
-    if (error) {
-      console.error('Recent activity query error:', error)
+        const eventData = row.eventData as { new_stage?: string; old_stage?: string } | null
+        const newStage = eventData?.new_stage || 'unknown'
+        const stageLabel = STAGE_LABELS[newStage as keyof typeof STAGE_LABELS] || newStage
+        const timestamp = new Date(row.createdAt!)
+
+        return {
+          id: row.id,
+          name,
+          action: `Moved to ${stageLabel}`,
+          stage: newStage,
+          source: row.source || row.contactSource || null,
+          timestamp: row.createdAt!.toISOString(),
+          timeAgo: getTimeAgo(timestamp),
+        }
+      })
+
+      return NextResponse.json({ activity })
+    } catch (joinError) {
+      console.error('Recent activity join query error:', joinError)
       // Fallback: query contacts table directly for recent updates
-      const { data: contacts, error: contactsError } = await supabase
-        .from('contacts')
-        .select('id, first_name, last_name, current_stage, source, updated_at')
-        .order('updated_at', { ascending: false })
-        .limit(limit)
+      const contactRows = await db
+        .select({
+          id: contacts.id,
+          firstName: contacts.firstName,
+          lastName: contacts.lastName,
+          currentStage: contacts.currentStage,
+          source: contacts.source,
+          updatedAt: contacts.updatedAt,
+        })
+        .from(contacts)
+        .orderBy(desc(contacts.updatedAt))
+        .limit(limitParam)
 
-      if (contactsError) {
-        throw contactsError
-      }
-
-      const activity: RecentActivityItem[] = (contacts || []).map((contact) => {
-        const name = [contact.first_name, contact.last_name].filter(Boolean).join(' ') || 'Unknown'
-        const stageLabel = STAGE_LABELS[contact.current_stage as keyof typeof STAGE_LABELS] || contact.current_stage
-        const timestamp = new Date(contact.updated_at)
+      const activity: RecentActivityItem[] = contactRows.map((contact) => {
+        const name = [contact.firstName, contact.lastName].filter(Boolean).join(' ') || 'Unknown'
+        const stageLabel = STAGE_LABELS[contact.currentStage as keyof typeof STAGE_LABELS] || contact.currentStage
+        const timestamp = new Date(contact.updatedAt!)
 
         return {
           id: contact.id,
           name,
           action: `Moved to ${stageLabel}`,
-          stage: contact.current_stage,
+          stage: contact.currentStage!,
           source: contact.source,
-          timestamp: contact.updated_at,
+          timestamp: contact.updatedAt!.toISOString(),
           timeAgo: getTimeAgo(timestamp),
         }
       })
 
       return NextResponse.json({ activity })
     }
-
-    // Process events into activity items
-    type ContactData = { id: string; first_name: string | null; last_name: string | null; source: string | null }
-    const activity: RecentActivityItem[] = (events || []).map((event) => {
-      // Supabase join returns the related contact object directly (not an array for 1-to-1 relationships)
-      const contactData = event.contact as ContactData | ContactData[] | null
-      const contact = Array.isArray(contactData) ? contactData[0] : contactData
-      const name = contact
-        ? [contact.first_name, contact.last_name].filter(Boolean).join(' ') || 'Unknown'
-        : 'Unknown'
-
-      const eventData = event.event_data as { new_stage?: string; old_stage?: string } | null
-      const newStage = eventData?.new_stage || 'unknown'
-      const stageLabel = STAGE_LABELS[newStage as keyof typeof STAGE_LABELS] || newStage
-      const timestamp = new Date(event.created_at)
-
-      return {
-        id: event.id,
-        name,
-        action: `Moved to ${stageLabel}`,
-        stage: newStage,
-        source: event.source || contact?.source || null,
-        timestamp: event.created_at,
-        timeAgo: getTimeAgo(timestamp),
-      }
-    })
-
-    return NextResponse.json({ activity })
   } catch (error) {
     console.error('Recent activity error:', error)
     return NextResponse.json(

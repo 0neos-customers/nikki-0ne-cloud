@@ -8,7 +8,8 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server'
-import { createServerClient } from '@0ne/db/server'
+import { db, and, isNull, isNotNull, asc } from '@0ne/db/server'
+import { skoolMembers } from '@0ne/db/server'
 import { GHLClient } from '@/features/kpi/lib/ghl-client'
 
 export const maxDuration = 300 // 5 minutes max
@@ -27,9 +28,8 @@ export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url)
   const dryRun = searchParams.get('dry') === 'true'
   const limitParam = searchParams.get('limit')
-  const limit = limitParam ? parseInt(limitParam) : undefined
+  const limitVal = limitParam ? parseInt(limitParam) : undefined
 
-  const supabase = createServerClient()
   const ghl = new GHLClient()
 
   const stats = {
@@ -43,22 +43,18 @@ export async function GET(request: NextRequest) {
 
   try {
     // Get all Skool member emails that don't have a GHL match
-    const query = supabase
-      .from('skool_members')
-      .select('email')
-      .not('email', 'is', null)
-      .is('ghl_contact_id', null)
-      .order('email')
+    let query = db
+      .select({ email: skoolMembers.email })
+      .from(skoolMembers)
+      .where(and(isNotNull(skoolMembers.email), isNull(skoolMembers.ghlContactId)))
+      .orderBy(asc(skoolMembers.email))
+      .$dynamic()
 
-    if (limit) {
-      query.limit(limit)
+    if (limitVal) {
+      query = query.limit(limitVal)
     }
 
-    const { data: members, error: fetchError } = await query
-
-    if (fetchError || !members) {
-      throw new Error(`Failed to fetch Skool members: ${fetchError?.message}`)
-    }
+    const members = await query
 
     stats.total = members.length
     console.log(`[tag-skool] Processing ${members.length} unmatched Skool members...`)

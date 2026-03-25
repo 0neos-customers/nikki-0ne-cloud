@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server'
 import { auth } from '@clerk/nextjs/server'
-import { createServerClient } from '@0ne/db/server'
+import { db, eq, gte, lte, and, or, inArray, isNull, asc } from '@0ne/db/server'
+import { contacts, skoolMembers, cohortSnapshots, ghlTransactions } from '@0ne/db/server'
 import { COHORT_DAYS, type CohortDay } from '@/features/kpi/lib/config'
-import { sanitizeForPostgrestFilter } from '@/lib/postgrest-utils'
 
 export const dynamic = 'force-dynamic'
 
@@ -48,8 +48,6 @@ export async function GET(request: Request) {
     const sources = sourcesParam ? sourcesParam.split(',').filter(Boolean) : []
     const weeksBack = parseInt(searchParams.get('weeks') || '8')
 
-    const supabase = createServerClient()
-
     // Calculate date range
     const now = new Date()
     const startDate = new Date(now)
@@ -58,37 +56,30 @@ export async function GET(request: Request) {
     // If sources filter is provided, get matching skool_user_ids from skool_members
     let skoolUserIds: string[] | null = null
     if (sources.length > 0) {
-      // Query skool_members to get user IDs with matching attribution sources
-      // Note: 'unknown' source means attribution_source IS NULL
       const hasUnknown = sources.includes('unknown')
       const otherSources = sources.filter(s => s !== 'unknown')
 
-      let skoolQuery = supabase
-        .from('skool_members')
-        .select('skool_user_id')
-
-      const safeSources = otherSources.map(sanitizeForPostgrestFilter)
-      if (hasUnknown && safeSources.length > 0) {
-        // Both unknown (NULL) and specific sources
-        skoolQuery = skoolQuery.or(`attribution_source.in.(${safeSources.join(',')}),attribution_source.is.null`)
+      let sourceFilter
+      if (hasUnknown && otherSources.length > 0) {
+        sourceFilter = or(inArray(skoolMembers.attributionSource, otherSources), isNull(skoolMembers.attributionSource))
       } else if (hasUnknown) {
-        // Only unknown (NULL)
-        skoolQuery = skoolQuery.is('attribution_source', null)
+        sourceFilter = isNull(skoolMembers.attributionSource)
       } else {
-        // Only specific sources
-        skoolQuery = skoolQuery.in('attribution_source', safeSources)
+        sourceFilter = inArray(skoolMembers.attributionSource, otherSources)
       }
 
-      const { data: skoolMembers } = await skoolQuery
-      skoolUserIds = skoolMembers?.map(m => m.skool_user_id).filter(Boolean) || []
+      const skoolMembersData = await db
+        .select({ skoolUserId: skoolMembers.skoolUserId })
+        .from(skoolMembers)
+        .where(sourceFilter)
+
+      skoolUserIds = skoolMembersData.map(m => m.skoolUserId).filter(Boolean)
     }
 
     // Get contacts created in the range
-    let contactsQuery = supabase
-      .from('contacts')
-      .select('*')
-      .gte('created_at', startDate.toISOString())
-      .order('created_at', { ascending: true })
+    const contactFilters = [
+      gte(contacts.createdAt, startDate),
+    ]
 
     // Apply source filter via skool_user_id join (new attribution-based filtering)
     if (skoolUserIds !== null) {
@@ -111,29 +102,32 @@ export async function GET(request: Request) {
           sourceFilteringNote: 'No contacts found matching the selected attribution sources.',
         })
       }
-      contactsQuery = contactsQuery.in('skool_user_id', skoolUserIds)
+      contactFilters.push(inArray(contacts.skoolUserId, skoolUserIds))
     } else if (source) {
-      // Legacy single source filter (deprecated, uses contacts.source)
-      contactsQuery = contactsQuery.eq('source', source)
+      contactFilters.push(eq(contacts.source, source))
     }
 
-    const { data: contacts } = await contactsQuery
+    const contactsData = await db
+      .select()
+      .from(contacts)
+      .where(and(...contactFilters))
+      .orderBy(asc(contacts.createdAt))
 
     // Get cohort snapshots if available
-    const { data: cohortSnapshots } = await supabase
-      .from('cohort_snapshots')
-      .select('*')
-      .gte('snapshot_date', startDate.toISOString())
-      .order('snapshot_date', { ascending: true })
+    const cohortSnapshotsData = await db
+      .select()
+      .from(cohortSnapshots)
+      .where(gte(cohortSnapshots.createdAt, startDate))
+      .orderBy(asc(cohortSnapshots.createdAt))
 
     // Group contacts by week cohort
     const cohortMap = new Map<string, {
       startDate: Date
-      contacts: typeof contacts
+      contacts: typeof contactsData
     }>()
 
-    contacts?.forEach((contact) => {
-      const createdAt = new Date(contact.created_at)
+    contactsData.forEach((contact) => {
+      const createdAt = new Date(contact.createdAt!)
       const weekKey = getWeekNumber(createdAt)
       const weekStart = getWeekStart(createdAt)
 
@@ -143,14 +137,14 @@ export async function GET(request: Request) {
           contacts: [],
         })
       }
-      cohortMap.get(weekKey)!.contacts!.push(contact)
+      ;(cohortMap.get(weekKey)!.contacts as typeof contactsData).push(contact)
     })
 
     // Build cohort progression data
     const cohorts: CohortRow[] = []
 
     for (const [weekKey, cohortData] of cohortMap) {
-      const cohortContacts = cohortData.contacts || []
+      const cohortContacts = (cohortData.contacts || []) as typeof contactsData
       const cohortStartDate = cohortData.startDate
 
       // Calculate progression for each milestone day
@@ -158,8 +152,8 @@ export async function GET(request: Request) {
 
       // Get GHL contact IDs for this cohort to query transactions
       const cohortGhlContactIds = cohortContacts
-        .map((c) => c.ghl_contact_id)
-        .filter(Boolean)
+        .map((c) => c.ghlContactId)
+        .filter(Boolean) as string[]
 
       for (const day of COHORT_DAYS) {
         // For each day milestone, count how many leads have reached that age
@@ -173,7 +167,7 @@ export async function GET(request: Request) {
 
         // Count leads that have aged to this point
         const eligibleContacts = cohortContacts.filter((c) => {
-          const leadAge = c.lead_age || 0
+          const leadAge = c.leadAge || 0
           return leadAge >= day
         })
 
@@ -184,15 +178,19 @@ export async function GET(request: Request) {
 
         if (cohortGhlContactIds.length > 0) {
           // Query transactions for these contacts up to the milestone date
-          const { data: transactions } = await supabase
-            .from('ghl_transactions')
-            .select('amount')
-            .in('ghl_contact_id', cohortGhlContactIds)
-            .eq('status', 'succeeded')
-            .lte('transaction_date', milestoneDate.toISOString())
+          const txns = await db
+            .select({ amount: ghlTransactions.amount })
+            .from(ghlTransactions)
+            .where(
+              and(
+                inArray(ghlTransactions.ghlContactId, cohortGhlContactIds),
+                eq(ghlTransactions.status, 'succeeded'),
+                lte(ghlTransactions.transactionDate, milestoneDate),
+              )
+            )
 
           // Sum up successful transaction amounts
-          totalRevenue = transactions?.reduce((sum, t) => sum + (Number(t.amount) || 0), 0) || 0
+          totalRevenue = txns.reduce((sum, t) => sum + (Number(t.amount) || 0), 0)
         }
 
         // EPL = Total Revenue / Cohort Size (total contacts, not just eligible)
@@ -241,7 +239,7 @@ export async function GET(request: Request) {
     }
 
     const overallMetrics = {
-      totalLeads: contacts?.length || 0,
+      totalLeads: contactsData.length,
       averageEpl: eplCount > 0 ? Math.round((totalEplSum / eplCount) * 100) / 100 : 0,
       averageLtv: ltvCount > 0 ? Math.round((totalLtvSum / ltvCount) * 100) / 100 : 0,
       cohortDays: COHORT_DAYS,
@@ -249,7 +247,7 @@ export async function GET(request: Request) {
 
     // Get available sources for filtering
     const sourceSet = new Set<string>()
-    contacts?.forEach((c) => {
+    contactsData.forEach((c) => {
       if (c.source) sourceSet.add(c.source)
     })
 

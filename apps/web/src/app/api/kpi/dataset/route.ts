@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { auth } from '@clerk/nextjs/server'
-import { createServerClient } from '@0ne/db/server'
+import { db, eq, gte, lte, asc, desc, and } from '@0ne/db/server'
+import { dailyAggregates as dailyAggregatesTable, dimensionSources, dimensionStages as dimensionStagesTable, dimensionCampaigns, dimensionExpenseCategories, weeklyTrends as weeklyTrendsTable, dailyExpensesByCategory, contacts as contactsTable } from '@0ne/db/server'
 import {
   FUNNEL_STAGE_ORDER,
   STAGE_LABELS,
@@ -123,67 +124,78 @@ export async function GET(request: Request) {
     const startDateStr = startDate.toISOString().split('T')[0]
     const endDateStr = endDate.toISOString().split('T')[0]
 
-    const supabase = createServerClient()
-
     // Parallel fetch all data
     const [
-      aggregatesResult,
-      dimensionSourcesResult,
-      dimensionStagesResult,
-      dimensionCampaignsResult,
-      dimensionExpenseCategoriesResult,
-      weeklyTrendsResult,
-      dailyExpensesResult,
+      aggregatesData,
+      dimensionSourcesData,
+      dimensionStagesData,
+      dimensionCampaignsData,
+      dimensionExpenseCategoriesData,
+      weeklyTrendsData,
+      dailyExpensesData,
       skoolMetrics,
       revenueSnapshot,
-      contactStageCountsResult,
+      contactStageCountsData,
     ] = await Promise.all([
       // 1. Daily aggregates for the period
-      supabase
-        .from('daily_aggregates')
-        .select('*')
-        .gte('date', startDateStr)
-        .lte('date', endDateStr)
-        .order('date', { ascending: true }),
+      db.select().from(dailyAggregatesTable)
+        .where(and(gte(dailyAggregatesTable.date, startDateStr), lte(dailyAggregatesTable.date, endDateStr)))
+        .orderBy(asc(dailyAggregatesTable.date)),
 
       // 2. Dimension tables
-      supabase
-        .from('dimension_sources')
-        .select('source, display_name, contact_count, last_seen_date, is_active')
-        .eq('is_active', true)
-        .order('contact_count', { ascending: false }),
+      db.select({
+        source: dimensionSources.source,
+        displayName: dimensionSources.displayName,
+        contactCount: dimensionSources.contactCount,
+        lastSeenDate: dimensionSources.lastSeenDate,
+        isActive: dimensionSources.isActive,
+      }).from(dimensionSources)
+        .where(eq(dimensionSources.isActive, true))
+        .orderBy(desc(dimensionSources.contactCount)),
 
-      supabase
-        .from('dimension_stages')
-        .select('stage, display_name, color, sort_order, contact_count')
-        .order('sort_order', { ascending: true }),
+      db.select({
+        stage: dimensionStagesTable.stage,
+        displayName: dimensionStagesTable.displayName,
+        color: dimensionStagesTable.color,
+        sortOrder: dimensionStagesTable.sortOrder,
+        contactCount: dimensionStagesTable.contactCount,
+      }).from(dimensionStagesTable)
+        .orderBy(asc(dimensionStagesTable.sortOrder)),
 
-      supabase
-        .from('dimension_campaigns')
-        .select('campaign_id, campaign_name, contact_count, is_active')
-        .eq('is_active', true)
-        .order('contact_count', { ascending: false }),
+      db.select({
+        campaignId: dimensionCampaigns.campaignId,
+        campaignName: dimensionCampaigns.campaignName,
+        contactCount: dimensionCampaigns.contactCount,
+        isActive: dimensionCampaigns.isActive,
+      }).from(dimensionCampaigns)
+        .where(eq(dimensionCampaigns.isActive, true))
+        .orderBy(desc(dimensionCampaigns.contactCount)),
 
-      supabase
-        .from('dimension_expense_categories')
-        .select('category, display_name, color, expense_count, total_amount, is_system')
-        .order('total_amount', { ascending: false }),
+      db.select({
+        category: dimensionExpenseCategories.category,
+        displayName: dimensionExpenseCategories.displayName,
+        color: dimensionExpenseCategories.color,
+        expenseCount: dimensionExpenseCategories.expenseCount,
+        totalAmount: dimensionExpenseCategories.totalAmount,
+        isSystem: dimensionExpenseCategories.isSystem,
+      }).from(dimensionExpenseCategories)
+        .orderBy(desc(dimensionExpenseCategories.totalAmount)),
 
       // 3. Weekly trends
-      supabase
-        .from('weekly_trends')
-        .select('*')
-        .gte('week_start', startDateStr)
-        .lte('week_start', endDateStr)
-        .order('week_start', { ascending: true }),
+      db.select().from(weeklyTrendsTable)
+        .where(and(gte(weeklyTrendsTable.weekStart, startDateStr), lte(weeklyTrendsTable.weekStart, endDateStr)))
+        .orderBy(asc(weeklyTrendsTable.weekStart)),
 
       // 4. Daily expenses by category
-      supabase
-        .from('daily_expenses_by_category')
-        .select('date, category, amount, is_system, expense_count')
-        .gte('date', startDateStr)
-        .lte('date', endDateStr)
-        .order('date', { ascending: true }),
+      db.select({
+        date: dailyExpensesByCategory.date,
+        category: dailyExpensesByCategory.category,
+        amount: dailyExpensesByCategory.amount,
+        isSystem: dailyExpensesByCategory.isSystem,
+        expenseCount: dailyExpensesByCategory.expenseCount,
+      }).from(dailyExpensesByCategory)
+        .where(and(gte(dailyExpensesByCategory.date, startDateStr), lte(dailyExpensesByCategory.date, endDateStr)))
+        .orderBy(asc(dailyExpensesByCategory.date)),
 
       // 5. Skool metrics (latest snapshot)
       getLatestMetrics(),
@@ -192,17 +204,15 @@ export async function GET(request: Request) {
       getLatestRevenueSnapshot(),
 
       // 7. Contact stage counts (for funnel - uses stages array)
-      supabase
-        .from('contacts')
-        .select('stages'),
+      db.select({ stages: contactsTable.stages }).from(contactsTable),
     ])
 
-    const aggregates = (aggregatesResult.data || []) as DailyAggregate[]
+    const aggregates = aggregatesData as unknown as DailyAggregate[]
 
     // Calculate stage counts from contacts' stages arrays (tags accumulate)
     const stageCountsMap: Record<string, number> = {}
-    const contacts = contactStageCountsResult.data || []
-    contacts.forEach((contact) => {
+    const contactsData = contactStageCountsData
+    contactsData.forEach((contact) => {
       const stages = (contact.stages as string[]) || []
       stages.forEach((stage) => {
         if (stage) {
@@ -212,9 +222,9 @@ export async function GET(request: Request) {
     })
 
     // Build dimension stages with live counts
-    const dimensionStages = (dimensionStagesResult.data || []).map((stage: DimensionStage) => ({
+    const dimensionStagesWithCounts = dimensionStagesData.map((stage) => ({
       ...stage,
-      contact_count: stageCountsMap[stage.stage] || stage.contact_count || 0,
+      contact_count: stageCountsMap[stage.stage!] || stage.contactCount || 0,
     }))
 
     // Organize aggregates by dimension for easy client-side slicing
@@ -257,7 +267,7 @@ export async function GET(request: Request) {
     const weeklyTrendsBySource: Record<string, WeeklyTrend[]> = {}
     const overallWeeklyTrends: WeeklyTrend[] = []
 
-    for (const trend of (weeklyTrendsResult.data || []) as WeeklyTrend[]) {
+    for (const trend of weeklyTrendsData as unknown as WeeklyTrend[]) {
       if (!trend.source && !trend.campaign_id) {
         overallWeeklyTrends.push(trend)
       } else if (trend.source && !trend.campaign_id) {
@@ -273,7 +283,7 @@ export async function GET(request: Request) {
     const dailyExpensesTotal: { date: string; amount: number }[] = []
     const dailyExpensesMap = new Map<string, number>()
 
-    for (const expense of (dailyExpensesResult.data || []) as DailyExpenseByCategory[]) {
+    for (const expense of dailyExpensesData as unknown as DailyExpenseByCategory[]) {
       if (!expensesByCategory[expense.category]) {
         expensesByCategory[expense.category] = []
       }
@@ -302,10 +312,10 @@ export async function GET(request: Request) {
         all: aggregates,
       },
       dimensions: {
-        sources: (dimensionSourcesResult.data || []) as DimensionSource[],
-        stages: dimensionStages as DimensionStage[],
-        campaigns: (dimensionCampaignsResult.data || []) as DimensionCampaign[],
-        expenseCategories: (dimensionExpenseCategoriesResult.data || []) as DimensionExpenseCategory[],
+        sources: dimensionSourcesData as unknown as DimensionSource[],
+        stages: dimensionStagesWithCounts as unknown as DimensionStage[],
+        campaigns: dimensionCampaignsData as unknown as DimensionCampaign[],
+        expenseCategories: dimensionExpenseCategoriesData as unknown as DimensionExpenseCategory[],
       },
       funnel: {
         stages: funnelStages,
@@ -321,7 +331,7 @@ export async function GET(request: Request) {
       expenses: {
         byCategory: expensesByCategory,
         dailyTotal: dailyExpensesTotal,
-        categories: (dimensionExpenseCategoriesResult.data || []) as DimensionExpenseCategory[],
+        categories: dimensionExpenseCategoriesData as unknown as DimensionExpenseCategory[],
       },
       skool: skoolMetrics
         ? {
@@ -344,7 +354,7 @@ export async function GET(request: Request) {
         periodEnd: endDateStr,
         daysIncluded: daysBack,
         aggregateCount: aggregates.length,
-        contactCount: contacts.length,
+        contactCount: contactsData.length,
       },
     }
 

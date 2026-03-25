@@ -21,7 +21,8 @@
  */
 
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@0ne/db/server'
+import { db, eq, and, desc, like, not } from '@0ne/db/server'
+import { dmContactMappings, dmMessages } from '@0ne/db/server'
 import {
   type GhlOutboundMessagePayload,
 } from '@/features/dm-sync/lib/ghl-conversation'
@@ -34,34 +35,15 @@ export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 /**
- * Database row type for dm_messages
- */
-interface DmMessageInsert {
-  clerk_user_id: string
-  skool_conversation_id: string
-  skool_message_id: string
-  ghl_message_id: string | null
-  skool_user_id: string
-  direction: 'inbound' | 'outbound'
-  message_text: string | null
-  status: 'synced' | 'pending' | 'failed'
-  source: 'ghl' | 'manual' | 'hand-raiser'
-  // Phase 5: Multi-staff support
-  staff_skool_id?: string | null
-  staff_display_name?: string | null
-  ghl_user_id?: string | null
-}
-
-/**
  * Contact mapping row from database
  */
 interface ContactMappingRow {
   id: string
-  clerk_user_id: string
-  skool_user_id: string
-  skool_username: string | null
-  skool_display_name: string | null
-  ghl_contact_id: string
+  clerkUserId: string
+  skoolUserId: string
+  skoolUsername: string | null
+  skoolDisplayName: string | null
+  ghlContactId: string
 }
 
 export async function POST(request: Request) {
@@ -132,15 +114,13 @@ export async function POST(request: Request) {
     }
 
     // 5. Look up Skool user from dm_contact_mappings (by ghl_contact_id)
-    const supabase = createServerClient()
+    const [mapping] = await db
+      .select()
+      .from(dmContactMappings)
+      .where(eq(dmContactMappings.ghlContactId, contactId))
+      .limit(1)
 
-    const { data: mapping, error: mappingError } = await supabase
-      .from('dm_contact_mappings')
-      .select('*')
-      .eq('ghl_contact_id', contactId)
-      .single()
-
-    if (mappingError || !mapping) {
+    if (!mapping) {
       console.error('[GHL Webhook] Contact mapping not found for:', contactId)
       // Return 200 to acknowledge receipt - we can't process but shouldn't retry
       return NextResponse.json({
@@ -158,10 +138,10 @@ export async function POST(request: Request) {
     const ghlSenderUserId = (payload as unknown as Record<string, unknown>).userId as string | undefined
 
     const { staff, processedMessage } = await resolveOutboundStaff(
-      typedMapping.clerk_user_id,
+      typedMapping.clerkUserId,
       body,
       ghlSenderUserId,
-      typedMapping.skool_user_id
+      typedMapping.skoolUserId
     )
 
     // 7. Look up the real Skool conversation ID from previous messages with this user
@@ -169,38 +149,40 @@ export async function POST(request: Request) {
     const staffSkoolId = staff?.skoolUserId
 
     // First try with staff's Skool ID
-    let conversationResult = await supabase
-      .from('dm_messages')
-      .select('skool_conversation_id')
-      .eq('skool_user_id', typedMapping.skool_user_id)
-      .eq('staff_skool_id', staffSkoolId || '')
-      .not('skool_conversation_id', 'like', 'ghl:%')
+    let [convRow] = await db
+      .select({ skoolConversationId: dmMessages.skoolConversationId })
+      .from(dmMessages)
+      .where(and(
+        eq(dmMessages.skoolUserId, typedMapping.skoolUserId),
+        eq(dmMessages.staffSkoolId, staffSkoolId || ''),
+        not(like(dmMessages.skoolConversationId, 'ghl:%')),
+      ))
       .limit(1)
-      .single()
 
     // Fallback: just match by Skool user (ignore staff_skool_id)
-    if (!conversationResult.data?.skool_conversation_id) {
-      conversationResult = await supabase
-        .from('dm_messages')
-        .select('skool_conversation_id')
-        .eq('skool_user_id', typedMapping.skool_user_id)
-        .not('skool_conversation_id', 'like', 'ghl:%')
-        .order('created_at', { ascending: false })
+    if (!convRow?.skoolConversationId) {
+      ;[convRow] = await db
+        .select({ skoolConversationId: dmMessages.skoolConversationId })
+        .from(dmMessages)
+        .where(and(
+          eq(dmMessages.skoolUserId, typedMapping.skoolUserId),
+          not(like(dmMessages.skoolConversationId, 'ghl:%')),
+        ))
+        .orderBy(desc(dmMessages.createdAt))
         .limit(1)
-        .single()
     }
 
-    if (!conversationResult.data?.skool_conversation_id) {
-      console.error('[GHL Webhook] No Skool conversation found for user:', typedMapping.skool_user_id)
+    if (!convRow?.skoolConversationId) {
+      console.error('[GHL Webhook] No Skool conversation found for user:', typedMapping.skoolUserId)
       // Return 200 to acknowledge - can't route without conversation
       return NextResponse.json({
         success: false,
         error: 'No Skool conversation found for this contact',
-        skoolUserId: typedMapping.skool_user_id,
+        skoolUserId: typedMapping.skoolUserId,
       })
     }
 
-    const skoolConversationId = conversationResult.data.skool_conversation_id
+    const skoolConversationId = convRow.skoolConversationId
 
     // Generate a unique message ID for Skool (will be updated when actually sent)
     const pendingSkoolMessageId = `pending:${Date.now()}:${Math.random().toString(36).substring(7)}`
@@ -213,51 +195,47 @@ export async function POST(request: Request) {
     // 9. Queue message for sending via Skool API
     // Insert into dm_messages with direction='outbound', status='pending'
     // Note: clerk_user_id stores the Clerk ID, staff_skool_id stores the Skool staff ID
-    const messageInsert: DmMessageInsert = {
-      clerk_user_id: typedMapping.clerk_user_id,  // Use Clerk user ID from contact mapping
-      skool_conversation_id: skoolConversationId,
-      skool_message_id: pendingSkoolMessageId,
-      ghl_message_id: messageId || null,
-      skool_user_id: typedMapping.skool_user_id,
-      direction: 'outbound',
-      message_text: finalMessageText,
-      status: 'pending',
-      source: 'ghl',  // Mark as GHL-originated for extension pickup
-      // Phase 5: Multi-staff attribution
-      staff_skool_id: staff?.skoolUserId || null,
-      staff_display_name: staff?.displayName || null,
-      ghl_user_id: ghlSenderUserId || null,
-    }
+    try {
+      const [insertedMessage] = await db
+        .insert(dmMessages)
+        .values({
+          clerkUserId: typedMapping.clerkUserId,
+          skoolConversationId: skoolConversationId,
+          skoolMessageId: pendingSkoolMessageId,
+          ghlMessageId: messageId || null,
+          skoolUserId: typedMapping.skoolUserId,
+          direction: 'outbound',
+          messageText: finalMessageText,
+          status: 'pending',
+          source: 'ghl',
+          staffSkoolId: staff?.skoolUserId || null,
+          staffDisplayName: staff?.displayName || null,
+          ghlUserId: ghlSenderUserId || null,
+        })
+        .returning({ id: dmMessages.id })
 
-    const { data: insertedMessage, error: insertError } = await supabase
-      .from('dm_messages')
-      .insert(messageInsert)
-      .select('id')
-      .single()
+      const duration = Date.now() - startTime
+      console.log('[GHL Webhook] Queued outbound message', insertedMessage?.id, 'in', duration + 'ms')
 
-    if (insertError) {
-      console.error('[GHL Webhook] Failed to queue message:', insertError.message)
+      // 10. Return 200 OK
+      return NextResponse.json({
+        success: true,
+        queued: true,
+        messageId: insertedMessage?.id,
+        skoolUserId: typedMapping.skoolUserId,
+        duration,
+      })
+    } catch (insertError) {
+      console.error('[GHL Webhook] Failed to queue message:', insertError)
       return NextResponse.json(
         {
           success: false,
           error: 'Failed to queue message',
-          details: insertError.message,
+          details: insertError instanceof Error ? insertError.message : String(insertError),
         },
         { status: 500 }
       )
     }
-
-    const duration = Date.now() - startTime
-    console.log('[GHL Webhook] Queued outbound message', insertedMessage?.id, 'in', duration + 'ms')
-
-    // 10. Return 200 OK
-    return NextResponse.json({
-      success: true,
-      queued: true,
-      messageId: insertedMessage?.id,
-      skoolUserId: typedMapping.skool_user_id,
-      duration,
-    })
   } catch (error) {
     console.error('[GHL Webhook] Unexpected error:', error)
     return NextResponse.json(

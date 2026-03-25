@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@0ne/db/server'
+import { db, eq, and } from '@0ne/db/server'
+import { adMetrics, campaigns, metaAccountDaily, expenses } from '@0ne/db/server'
 import { SyncLogger } from '@/lib/sync-log'
 
 export const runtime = 'edge'
@@ -102,8 +103,6 @@ export async function GET(request: Request) {
     )
   }
 
-  const supabase = createServerClient()
-
   const { searchParams } = new URL(request.url)
   const backfill = searchParams.get('backfill') === 'true'
   const startDateParam = searchParams.get('startDate')
@@ -183,11 +182,11 @@ export async function GET(request: Request) {
         let campaignId = null
 
         if (insight.campaign_name) {
-          const { data: campaign } = await supabase
-            .from('campaigns')
-            .select('id')
-            .eq('name', insight.campaign_name)
-            .single()
+          const [campaign] = await db
+            .select({ id: campaigns.id })
+            .from(campaigns)
+            .where(eq(campaigns.name, insight.campaign_name))
+            .limit(1)
 
           if (campaign) {
             campaignId = campaign.id
@@ -209,45 +208,61 @@ export async function GET(request: Request) {
           'offsite_conversion.fb_pixel_purchase',
         ])
 
-        const { error: upsertError } = await supabase
-          .from('ad_metrics')
-          .upsert(
-            {
-              date: insight.date_start,
-              platform: 'meta',
-              campaign_id: campaignId,
-              campaign_meta_id: insight.campaign_id || null,
-              campaign_name: insight.campaign_name || null,
-              adset_id: insight.adset_id || null,
-              adset_name: insight.adset_name || null,
-              ad_id: insight.ad_id || null,
-              ad_name: insight.ad_name || null,
-              spend: parseFloat(insight.spend) || 0,
-              impressions: parseInt(insight.impressions) || 0,
-              clicks: parseInt(insight.clicks) || 0,
-              reach: parseInt(insight.reach || '0') || 0,
-              frequency: parseFloat(insight.frequency || '0') || 0,
-              unique_clicks: parseInt(insight.unique_clicks || '0') || 0,
-              link_clicks: parseInt(insight.inline_link_clicks || '0') || 0,
-              landing_page_views: landingPageViews,
-              completed_registrations: completedRegistrations,
-              conversions,
-              cost_per_conversion: costPerConversion,
-              roas,
-              cpm: parseFloat(insight.cpm) || 0,
-              cpc: parseFloat(insight.cpc) || 0,
-              ctr: parseFloat(insight.ctr) || 0,
-            },
-            {
-              onConflict: 'date,platform,adset_id,ad_id',
-            }
-          )
-
-        if (upsertError) {
-          console.error('Ad metrics upsert error:', upsertError)
-          errors++
-          continue
+        const record = {
+          date: insight.date_start,
+          platform: 'meta',
+          campaignId: campaignId,
+          campaignMetaId: insight.campaign_id || null,
+          campaignName: insight.campaign_name || null,
+          adsetId: insight.adset_id || null,
+          adsetName: insight.adset_name || null,
+          adId: insight.ad_id || null,
+          adName: insight.ad_name || null,
+          spend: String(parseFloat(insight.spend) || 0),
+          impressions: parseInt(insight.impressions) || 0,
+          clicks: parseInt(insight.clicks) || 0,
+          reach: parseInt(insight.reach || '0') || 0,
+          frequency: String(parseFloat(insight.frequency || '0') || 0),
+          uniqueClicks: parseInt(insight.unique_clicks || '0') || 0,
+          linkClicks: parseInt(insight.inline_link_clicks || '0') || 0,
+          landingPageViews,
+          completedRegistrations,
+          conversions,
+          costPerConversion: String(costPerConversion),
+          roas: String(roas),
+          cpm: String(parseFloat(insight.cpm) || 0),
+          cpc: String(parseFloat(insight.cpc) || 0),
+          ctr: String(parseFloat(insight.ctr) || 0),
         }
+
+        await db
+          .insert(adMetrics)
+          .values(record)
+          .onConflictDoUpdate({
+            target: [adMetrics.date, adMetrics.platform, adMetrics.adsetId, adMetrics.adId],
+            set: {
+              campaignId: record.campaignId,
+              campaignMetaId: record.campaignMetaId,
+              campaignName: record.campaignName,
+              adsetName: record.adsetName,
+              adName: record.adName,
+              spend: record.spend,
+              impressions: record.impressions,
+              clicks: record.clicks,
+              reach: record.reach,
+              frequency: record.frequency,
+              uniqueClicks: record.uniqueClicks,
+              linkClicks: record.linkClicks,
+              landingPageViews: record.landingPageViews,
+              completedRegistrations: record.completedRegistrations,
+              conversions: record.conversions,
+              costPerConversion: record.costPerConversion,
+              roas: record.roas,
+              cpm: record.cpm,
+              cpc: record.cpc,
+              ctr: record.ctr,
+            },
+          })
 
         synced++
       } catch (insightError) {
@@ -284,23 +299,33 @@ export async function GET(request: Request) {
     const accountInsights = await fetchPagedInsights(accountUrl.toString(), 50)
 
     for (const insight of accountInsights) {
-      const { error: accountUpsertError } = await supabase
-        .from('meta_account_daily')
-        .upsert(
-          {
-            date: insight.date_start,
-            platform: 'meta',
-            reach: parseInt(insight.reach || '0') || 0,
-            frequency: parseFloat(insight.frequency || '0') || 0,
-            unique_clicks: parseInt(insight.unique_clicks || '0') || 0,
-            impressions: parseInt(insight.impressions) || 0,
-            clicks: parseInt(insight.clicks) || 0,
-            spend: parseFloat(insight.spend) || 0,
-          },
-          { onConflict: 'date,platform' }
-        )
+      try {
+        const accountRecord = {
+          date: insight.date_start,
+          platform: 'meta',
+          reach: parseInt(insight.reach || '0') || 0,
+          frequency: String(parseFloat(insight.frequency || '0') || 0),
+          uniqueClicks: parseInt(insight.unique_clicks || '0') || 0,
+          impressions: parseInt(insight.impressions) || 0,
+          clicks: parseInt(insight.clicks) || 0,
+          spend: String(parseFloat(insight.spend) || 0),
+        }
 
-      if (accountUpsertError) {
+        await db
+          .insert(metaAccountDaily)
+          .values(accountRecord)
+          .onConflictDoUpdate({
+            target: [metaAccountDaily.date, metaAccountDaily.platform],
+            set: {
+              reach: accountRecord.reach,
+              frequency: accountRecord.frequency,
+              uniqueClicks: accountRecord.uniqueClicks,
+              impressions: accountRecord.impressions,
+              clicks: accountRecord.clicks,
+              spend: accountRecord.spend,
+            },
+          })
+      } catch (accountUpsertError) {
         console.error('Meta account daily upsert error:', accountUpsertError)
         errors++
       }
@@ -322,51 +347,43 @@ export async function GET(request: Request) {
 
       try {
         // Check if expense already exists for this date
-        const { data: existing } = await supabase
-          .from('expenses')
-          .select('id')
-          .eq('category', 'Facebook Ads')
-          .eq('meta_sync_date', syncDate)
-          .eq('is_system', true)
-          .single()
+        const [existing] = await db
+          .select({ id: expenses.id })
+          .from(expenses)
+          .where(and(
+            eq(expenses.category, 'Facebook Ads'),
+            eq(expenses.metaSyncDate, syncDate),
+            eq(expenses.isSystem, true),
+          ))
+          .limit(1)
 
         if (existing) {
           // Update existing expense
-          const { error: updateError } = await supabase
-            .from('expenses')
-            .update({
-              amount: dailySpend,
+          await db
+            .update(expenses)
+            .set({
+              amount: String(dailySpend),
               name: `Facebook Ads - ${syncDate}`,
             })
-            .eq('id', existing.id)
+            .where(eq(expenses.id, existing.id))
 
-          if (updateError) {
-            console.error('Facebook Ads expense update error:', updateError)
-            expensesErrors++
-          } else {
-            expensesSynced++
-          }
+          expensesSynced++
         } else {
           // Insert new expense
-          const { error: insertError } = await supabase
-            .from('expenses')
-            .insert({
+          await db
+            .insert(expenses)
+            .values({
               name: `Facebook Ads - ${syncDate}`,
               category: 'Facebook Ads',
-              amount: dailySpend,
+              amount: String(dailySpend),
               frequency: 'one_time',
-              expense_date: syncDate,
-              is_active: true,
-              is_system: true,
-              meta_sync_date: syncDate,
+              expenseDate: syncDate,
+              isActive: true,
+              isSystem: true,
+              metaSyncDate: syncDate,
             })
 
-          if (insertError) {
-            console.error('Facebook Ads expense insert error:', insertError)
-            expensesErrors++
-          } else {
-            expensesSynced++
-          }
+          expensesSynced++
         }
       } catch (expError) {
         console.error('Error syncing Facebook Ads expense:', expError)

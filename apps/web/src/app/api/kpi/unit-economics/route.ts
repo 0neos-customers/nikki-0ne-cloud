@@ -18,7 +18,8 @@
 
 import { NextResponse } from 'next/server'
 import { auth } from '@clerk/nextjs/server'
-import { createServerClient } from '@0ne/db/server'
+import { db, eq, gte, lte, and, desc, count } from '@0ne/db/server'
+import { skoolRevenueDaily, skoolMembers, ghlTransactions, expenses as expensesTable, contacts } from '@0ne/db/server'
 
 export const dynamic = 'force-dynamic'
 
@@ -87,7 +88,6 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url)
     const { startDate, endDate } = parseDateRange(searchParams)
 
-    const supabase = createServerClient()
     const now = new Date()
 
     console.log(`[Unit Economics] Calculating for ${startDate} to ${endDate}`)
@@ -95,17 +95,20 @@ export async function GET(request: Request) {
     // =============================================================================
     // 1. GET CURRENT MRR AND PAYING MEMBERS
     // =============================================================================
-    const { data: latestRevenue } = await supabase
-      .from('skool_revenue_daily')
-      .select('mrr, paying_members, retention_rate')
-      .eq('group_slug', 'fruitful')
-      .order('snapshot_date', { ascending: false })
+    const [latestRevenue] = await db
+      .select({
+        mrr: skoolRevenueDaily.mrr,
+        payingMembers: skoolRevenueDaily.payingMembers,
+        retentionRate: skoolRevenueDaily.retentionRate,
+      })
+      .from(skoolRevenueDaily)
+      .where(eq(skoolRevenueDaily.groupSlug, 'fruitful'))
+      .orderBy(desc(skoolRevenueDaily.snapshotDate))
       .limit(1)
-      .single()
 
-    const currentMrr = latestRevenue?.mrr || 0
-    const payingMembers = latestRevenue?.paying_members || 0
-    const retentionRate = latestRevenue?.retention_rate || 100
+    const currentMrr = Number(latestRevenue?.mrr) || 0
+    const payingMembers = latestRevenue?.payingMembers || 0
+    const retentionRate = Number(latestRevenue?.retentionRate) || 100
 
     // =============================================================================
     // 2. CALCULATE ARPU
@@ -130,25 +133,33 @@ export async function GET(request: Request) {
     // =============================================================================
     // 5. GET TOTAL MEMBERS FOR EPL
     // =============================================================================
-    const { count: totalMembers } = await supabase
-      .from('skool_members')
-      .select('*', { count: 'exact', head: true })
-      .eq('group_slug', 'fruitful')
-      .gte('member_since', startDate)
-      .lte('member_since', `${endDate}T23:59:59`)
+    const [{ value: totalMembers }] = await db
+      .select({ value: count() })
+      .from(skoolMembers)
+      .where(
+        and(
+          eq(skoolMembers.groupSlug, 'fruitful'),
+          gte(skoolMembers.memberSince, new Date(startDate)),
+          lte(skoolMembers.memberSince, new Date(`${endDate}T23:59:59Z`)),
+        )
+      )
 
     // =============================================================================
     // 6. GET TOTAL REVENUE FOR EPL
     // =============================================================================
     // One-time revenue from GHL
-    const { data: transactions } = await supabase
-      .from('ghl_transactions')
-      .select('amount')
-      .eq('status', 'succeeded')
-      .gte('transaction_date', startDate)
-      .lte('transaction_date', `${endDate}T23:59:59`)
+    const transactions = await db
+      .select({ amount: ghlTransactions.amount })
+      .from(ghlTransactions)
+      .where(
+        and(
+          eq(ghlTransactions.status, 'succeeded'),
+          gte(ghlTransactions.transactionDate, new Date(`${startDate}T00:00:00Z`)),
+          lte(ghlTransactions.transactionDate, new Date(`${endDate}T23:59:59Z`)),
+        )
+      )
 
-    const oneTimeRevenue = transactions?.reduce((sum, t) => sum + Number(t.amount), 0) || 0
+    const oneTimeRevenue = transactions.reduce((sum, t) => sum + Number(t.amount), 0)
 
     // Get cumulative recurring revenue over period
     // For EPL, we calculate average MRR × months in period
@@ -180,34 +191,45 @@ export async function GET(request: Request) {
       const cohortDateStr = cohortDate.toISOString().split('T')[0]
 
       // Get members who joined on or before this cohort date
-      const { count: cohortMembers } = await supabase
-        .from('skool_members')
-        .select('*', { count: 'exact', head: true })
-        .eq('group_slug', 'fruitful')
-        .lte('member_since', cohortDateStr)
+      const [{ value: cohortMembers }] = await db
+        .select({ value: count() })
+        .from(skoolMembers)
+        .where(
+          and(
+            eq(skoolMembers.groupSlug, 'fruitful'),
+            lte(skoolMembers.memberSince, new Date(cohortDateStr)),
+          )
+        )
 
       // Get revenue from transactions up to that date
-      const { data: cohortTransactions } = await supabase
-        .from('ghl_transactions')
-        .select('amount')
-        .eq('status', 'succeeded')
-        .lte('transaction_date', cohortDateStr)
+      const cohortTransactions = await db
+        .select({ amount: ghlTransactions.amount })
+        .from(ghlTransactions)
+        .where(
+          and(
+            eq(ghlTransactions.status, 'succeeded'),
+            lte(ghlTransactions.transactionDate, new Date(cohortDateStr)),
+          )
+        )
 
-      const cohortOneTimeRevenue = cohortTransactions?.reduce((sum, t) => sum + Number(t.amount), 0) || 0
+      const cohortOneTimeRevenue = cohortTransactions.reduce((sum, t) => sum + Number(t.amount), 0)
 
       // For recurring, estimate based on MRR history
-      const { data: cohortMrr } = await supabase
-        .from('skool_revenue_daily')
-        .select('mrr')
-        .eq('group_slug', 'fruitful')
-        .lte('snapshot_date', cohortDateStr)
-        .order('snapshot_date', { ascending: false })
+      const [cohortMrr] = await db
+        .select({ mrr: skoolRevenueDaily.mrr })
+        .from(skoolRevenueDaily)
+        .where(
+          and(
+            eq(skoolRevenueDaily.groupSlug, 'fruitful'),
+            lte(skoolRevenueDaily.snapshotDate, cohortDateStr),
+          )
+        )
+        .orderBy(desc(skoolRevenueDaily.snapshotDate))
         .limit(1)
-        .single()
 
       // Approximate recurring revenue for cohort period
       const cohortMonths = Math.max(1, Math.ceil(days / 30))
-      const cohortRecurringRevenue = (cohortMrr?.mrr || 0) * cohortMonths
+      const cohortRecurringRevenue = (Number(cohortMrr?.mrr) || 0) * cohortMonths
       const cohortTotalRevenue = cohortOneTimeRevenue + cohortRecurringRevenue
 
       const cohortMemberCount = cohortMembers || 1
@@ -225,26 +247,28 @@ export async function GET(request: Request) {
     // =============================================================================
     // 9. GET AD SPEND FOR CAC
     // =============================================================================
-    const { data: adSpend } = await supabase
-      .from('expenses')
-      .select('amount')
-      .eq('category', 'Facebook Ads')
-      .eq('is_active', true)
-      .gte('date', startDate)
-      .lte('date', endDate)
+    const adSpend = await db
+      .select({ amount: expensesTable.amount })
+      .from(expensesTable)
+      .where(
+        and(
+          eq(expensesTable.category, 'Facebook Ads'),
+          eq(expensesTable.isActive, true),
+        )
+      )
 
-    const totalAdSpend = adSpend?.reduce((sum, e) => sum + Number(e.amount), 0) || 0
+    const totalAdSpend = adSpend.reduce((sum, e) => sum + Number(e.amount), 0)
 
     // Get client count (Premium + VIP) from contacts
-    const { count: premiumCount } = await supabase
-      .from('contacts')
-      .select('*', { count: 'exact', head: true })
-      .eq('current_stage', 'premium')
+    const [{ value: premiumCount }] = await db
+      .select({ value: count() })
+      .from(contacts)
+      .where(eq(contacts.currentStage, 'premium'))
 
-    const { count: vipCount } = await supabase
-      .from('contacts')
-      .select('*', { count: 'exact', head: true })
-      .eq('current_stage', 'vip')
+    const [{ value: vipCount }] = await db
+      .select({ value: count() })
+      .from(contacts)
+      .where(eq(contacts.currentStage, 'vip'))
 
     const totalClients = (premiumCount || 0) + (vipCount || 0)
 

@@ -14,7 +14,8 @@
  * @module dm-sync/lib/contact-mapper
  */
 
-import { createServerClient } from '@0ne/db/server'
+import { db, eq, and, inArray } from '@0ne/db/server'
+import { dmContactMappings, skoolMembers } from '@0ne/db/server'
 import { GHLClient } from '@/features/kpi/lib/ghl-client'
 import type { SkoolApiMember, SkoolSurveyAnswer } from '@/features/skool/types'
 import type { ContactMappingRow, MapContactResult } from '../types'
@@ -64,45 +65,41 @@ export async function findOrCreateGhlContact(
   skoolDisplayName: string,
   memberData?: SkoolApiMember
 ): Promise<ContactLookupResult> {
-  const supabase = createServerClient()
   const ghl = new GHLClient()
 
   // 1. Check dm_contact_mappings cache first (fastest)
-  const { data: cachedMapping } = await supabase
-    .from('dm_contact_mappings')
-    .select('ghl_contact_id')
-    .eq('clerk_user_id', userId)
-    .eq('skool_user_id', skoolUserId)
-    .single()
+  const [cachedMapping] = await db.select({ ghlContactId: dmContactMappings.ghlContactId })
+    .from(dmContactMappings)
+    .where(and(eq(dmContactMappings.clerkUserId, userId), eq(dmContactMappings.skoolUserId, skoolUserId)))
+    .limit(1)
 
-  if (cachedMapping?.ghl_contact_id) {
+  if (cachedMapping?.ghlContactId) {
     return {
-      ghlContactId: cachedMapping.ghl_contact_id,
+      ghlContactId: cachedMapping.ghlContactId,
       matchMethod: 'cache',
       wasCreated: false,
     }
   }
 
   // 2. Check skool_members table for existing ghl_contact_id
-  const { data: skoolMember } = await supabase
-    .from('skool_members')
-    .select('ghl_contact_id, email')
-    .eq('skool_user_id', skoolUserId)
-    .single()
+  const [skoolMember] = await db.select({ ghlContactId: skoolMembers.ghlContactId, email: skoolMembers.email })
+    .from(skoolMembers)
+    .where(eq(skoolMembers.skoolUserId, skoolUserId))
+    .limit(1)
 
-  if (skoolMember?.ghl_contact_id) {
+  if (skoolMember?.ghlContactId) {
     // Cache the mapping
     await cacheMapping(
       userId,
       skoolUserId,
-      skoolMember.ghl_contact_id,
+      skoolMember.ghlContactId,
       skoolUsername,
       skoolDisplayName,
       'skool_members',
       skoolMember?.email
     )
     return {
-      ghlContactId: skoolMember.ghl_contact_id,
+      ghlContactId: skoolMember.ghlContactId,
       matchMethod: 'skool_members',
       wasCreated: false,
     }
@@ -131,14 +128,13 @@ export async function findOrCreateGhlContact(
       )
 
       // Update skool_members if we have a match
-      await supabase
-        .from('skool_members')
-        .update({
-          ghl_contact_id: contact.id,
-          matched_at: new Date().toISOString(),
-          match_method: 'email',
+      await db.update(skoolMembers)
+        .set({
+          ghlContactId: contact.id,
+          matchedAt: new Date(),
+          matchMethod: 'email',
         })
-        .eq('skool_user_id', skoolUserId)
+        .where(eq(skoolMembers.skoolUserId, skoolUserId))
 
       return {
         ghlContactId: contact.id,
@@ -166,14 +162,13 @@ export async function findOrCreateGhlContact(
     )
 
     // Update skool_members
-    await supabase
-      .from('skool_members')
-      .update({
-        ghl_contact_id: contactBySkoolId.id,
-        matched_at: new Date().toISOString(),
-        match_method: 'email', // We matched by custom field, but email is our primary method
+    await db.update(skoolMembers)
+      .set({
+        ghlContactId: contactBySkoolId.id,
+        matchedAt: new Date(),
+        matchMethod: 'email',
       })
-      .eq('skool_user_id', skoolUserId)
+      .where(eq(skoolMembers.skoolUserId, skoolUserId))
 
     return {
       ghlContactId: contactBySkoolId.id,
@@ -189,21 +184,30 @@ export async function findOrCreateGhlContact(
     )
 
     // Check if this user is a community member
-    const { data: memberCheck } = await supabase
-      .from('skool_members')
-      .select('skool_user_id')
-      .eq('skool_user_id', skoolUserId)
-      .single()
+    const [memberCheck] = await db.select({ skoolUserId: skoolMembers.skoolUserId })
+      .from(skoolMembers)
+      .where(eq(skoolMembers.skoolUserId, skoolUserId))
+      .limit(1)
 
-    await supabase.from('dm_contact_mappings').upsert({
-      clerk_user_id: userId,
-      skool_user_id: skoolUserId,
-      skool_username: skoolUsername,
-      skool_display_name: skoolDisplayName,
-      ghl_contact_id: null,
-      match_method: 'no_email',
-      contact_type: memberCheck ? 'community_member' : 'dm_contact',
-    }, { onConflict: 'clerk_user_id,skool_user_id', ignoreDuplicates: false })
+    await db.insert(dmContactMappings).values({
+      clerkUserId: userId,
+      skoolUserId: skoolUserId,
+      skoolUsername: skoolUsername,
+      skoolDisplayName: skoolDisplayName,
+      ghlContactId: null,
+      matchMethod: 'no_email',
+      contactType: memberCheck ? 'community_member' : 'dm_contact',
+    }).onConflictDoUpdate({
+      target: [dmContactMappings.clerkUserId, dmContactMappings.skoolUserId],
+      set: {
+        skoolUsername: skoolUsername,
+        skoolDisplayName: skoolDisplayName,
+        ghlContactId: null,
+        matchMethod: 'no_email',
+        contactType: memberCheck ? 'community_member' : 'dm_contact',
+        updatedAt: new Date(),
+      },
+    })
 
     return {
       ghlContactId: null,
@@ -240,14 +244,13 @@ export async function findOrCreateGhlContact(
   )
 
   // Update skool_members
-  await supabase
-    .from('skool_members')
-    .update({
-      ghl_contact_id: newContactId,
-      matched_at: new Date().toISOString(),
-      match_method: 'email', // Created with email
+  await db.update(skoolMembers)
+    .set({
+      ghlContactId: newContactId,
+      matchedAt: new Date(),
+      matchMethod: 'email',
     })
-    .eq('skool_user_id', skoolUserId)
+    .where(eq(skoolMembers.skoolUserId, skoolUserId))
 
   return {
     ghlContactId: newContactId,
@@ -272,7 +275,6 @@ export async function findGhlContactsForUsers(
   }>
 ): Promise<Map<string, string>> {
   const results = new Map<string, string>()
-  const supabase = createServerClient()
 
   if (skoolUsers.length === 0) {
     return results
@@ -280,17 +282,19 @@ export async function findGhlContactsForUsers(
 
   // 1. Batch lookup from cache
   const skoolUserIds = skoolUsers.map((u) => u.skoolUserId)
-  const { data: cachedMappings } = await supabase
-    .from('dm_contact_mappings')
-    .select('skool_user_id, ghl_contact_id')
-    .eq('clerk_user_id', userId)
-    .in('skool_user_id', skoolUserIds)
+  const cachedMappings = await db.select({
+    skoolUserId: dmContactMappings.skoolUserId,
+    ghlContactId: dmContactMappings.ghlContactId,
+  }).from(dmContactMappings)
+    .where(and(eq(dmContactMappings.clerkUserId, userId), inArray(dmContactMappings.skoolUserId, skoolUserIds)))
 
   // Add cached results
   const cachedUserIds = new Set<string>()
-  for (const mapping of cachedMappings || []) {
-    results.set(mapping.skool_user_id, mapping.ghl_contact_id)
-    cachedUserIds.add(mapping.skool_user_id)
+  for (const mapping of cachedMappings) {
+    if (mapping.skoolUserId && mapping.ghlContactId) {
+      results.set(mapping.skoolUserId, mapping.ghlContactId)
+      cachedUserIds.add(mapping.skoolUserId)
+    }
   }
 
   // Filter users not in cache
@@ -616,43 +620,50 @@ async function cacheMapping(
   matchMethod: MatchMethod,
   email?: string | null
 ): Promise<void> {
-  const supabase = createServerClient()
-
   // Determine contact type
-  const { data: memberCheck } = await supabase
-    .from('skool_members')
-    .select('skool_user_id')
-    .eq('skool_user_id', skoolUserId)
-    .single()
+  const [memberCheck] = await db.select({ skoolUserId: skoolMembers.skoolUserId })
+    .from(skoolMembers)
+    .where(eq(skoolMembers.skoolUserId, skoolUserId))
+    .limit(1)
 
-  const mappingRow: Omit<ContactMappingRow, 'id' | 'created_at'> = {
-    clerk_user_id: userId,
-    skool_user_id: skoolUserId,
-    ghl_contact_id: ghlContactId,
-    skool_username: skoolUsername,
-    skool_display_name: skoolDisplayName,
-    match_method:
-      matchMethod === 'created'
-        ? 'synthetic'
-        : matchMethod === 'cache'
-          ? 'skool_id'
-          : matchMethod === 'skool_members'
-            ? 'email'
-            : matchMethod === 'no_email'
-              ? 'no_email'
-              : matchMethod,
-    email: email || null,
-    phone: null,
-    contact_type: memberCheck ? 'community_member' : 'dm_contact',
-    updated_at: new Date().toISOString(),
-  }
+  const resolvedMatchMethod =
+    matchMethod === 'created'
+      ? 'synthetic'
+      : matchMethod === 'cache'
+        ? 'skool_id'
+        : matchMethod === 'skool_members'
+          ? 'email'
+          : matchMethod === 'no_email'
+            ? 'no_email'
+            : matchMethod
+  const resolvedContactType = memberCheck ? 'community_member' : 'dm_contact'
 
-  const { error } = await supabase.from('dm_contact_mappings').upsert(mappingRow, {
-    onConflict: 'clerk_user_id,skool_user_id',
-    ignoreDuplicates: false,
-  })
-
-  if (error) {
+  try {
+    await db.insert(dmContactMappings).values({
+      clerkUserId: userId,
+      skoolUserId: skoolUserId,
+      ghlContactId: ghlContactId,
+      skoolUsername: skoolUsername,
+      skoolDisplayName: skoolDisplayName,
+      matchMethod: resolvedMatchMethod,
+      email: email || null,
+      phone: null,
+      contactType: resolvedContactType,
+      updatedAt: new Date(),
+    }).onConflictDoUpdate({
+      target: [dmContactMappings.clerkUserId, dmContactMappings.skoolUserId],
+      set: {
+        ghlContactId: ghlContactId,
+        skoolUsername: skoolUsername,
+        skoolDisplayName: skoolDisplayName,
+        matchMethod: resolvedMatchMethod,
+        email: email || null,
+        phone: null,
+        contactType: resolvedContactType,
+        updatedAt: new Date(),
+      },
+    })
+  } catch (error) {
     console.error('[Contact Mapper] Failed to cache mapping:', error)
     // Don't throw - caching is optimization, not critical
   }

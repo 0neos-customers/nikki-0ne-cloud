@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createServerClient } from '@0ne/db/server'
+import { db, desc, inArray, isNotNull } from '@0ne/db/server'
+import { dmMessages, dmContactMappings, skoolMembers, conversationSyncStatus } from '@0ne/db/server'
 
 export const dynamic = 'force-dynamic'
 
@@ -46,7 +47,6 @@ interface ConversationsResponse {
  */
 export async function GET(request: NextRequest) {
   try {
-    const supabase = createServerClient()
     const { searchParams } = new URL(request.url)
 
     const search = searchParams.get('search')?.trim() || ''
@@ -55,17 +55,18 @@ export async function GET(request: NextRequest) {
     const offset = parseInt(searchParams.get('offset') || '0', 10)
 
     // Get all messages - we need to aggregate by conversation
-    const { data: messages, error: messagesError } = await supabase
-      .from('dm_messages')
-      .select('skool_conversation_id, skool_user_id, direction, message_text, status, created_at, sender_name')
-      .order('created_at', { ascending: false })
+    const messages = await db.select({
+      skoolConversationId: dmMessages.skoolConversationId,
+      skoolUserId: dmMessages.skoolUserId,
+      direction: dmMessages.direction,
+      messageText: dmMessages.messageText,
+      status: dmMessages.status,
+      createdAt: dmMessages.createdAt,
+      senderName: dmMessages.senderName,
+    }).from(dmMessages)
+      .orderBy(desc(dmMessages.createdAt))
 
-    if (messagesError) {
-      console.error('[Conversations API] GET messages error:', messagesError)
-      return NextResponse.json({ error: messagesError.message }, { status: 500 })
-    }
-
-    if (!messages || messages.length === 0) {
+    if (messages.length === 0) {
       return NextResponse.json({
         conversations: [],
         summary: {
@@ -81,49 +82,59 @@ export async function GET(request: NextRequest) {
     }
 
     // Get contact mappings for participant names
-    const skoolUserIds = [...new Set(messages.map((m) => m.skool_user_id))]
+    const skoolUserIds = [...new Set(messages.map((m) => m.skoolUserId).filter(Boolean))] as string[]
 
-    const { data: mappings } = await supabase
-      .from('dm_contact_mappings')
-      .select('skool_user_id, skool_username, skool_display_name')
-      .in('skool_user_id', skoolUserIds)
+    const mappings = skoolUserIds.length > 0
+      ? await db.select({
+          skoolUserId: dmContactMappings.skoolUserId,
+          skoolUsername: dmContactMappings.skoolUsername,
+          skoolDisplayName: dmContactMappings.skoolDisplayName,
+        }).from(dmContactMappings).where(inArray(dmContactMappings.skoolUserId, skoolUserIds))
+      : []
 
     // Also check skool_members table as fallback for names
-    const { data: members } = await supabase
-      .from('skool_members')
-      .select('skool_user_id, display_name, skool_username')
-      .in('skool_user_id', skoolUserIds)
+    const members = skoolUserIds.length > 0
+      ? await db.select({
+          skoolUserId: skoolMembers.skoolUserId,
+          displayName: skoolMembers.displayName,
+          skoolUsername: skoolMembers.skoolUsername,
+        }).from(skoolMembers).where(inArray(skoolMembers.skoolUserId, skoolUserIds))
+      : []
 
     // Get participant names from conversation_sync_status (extension-pushed Skool API data)
-    const conversationIds = [...new Set(messages.map((m) => m.skool_conversation_id))]
-    const { data: syncStatuses } = await supabase
-      .from('conversation_sync_status')
-      .select('conversation_id, participant_name')
-      .in('conversation_id', conversationIds)
-      .not('participant_name', 'is', null)
+    const conversationIds = [...new Set(messages.map((m) => m.skoolConversationId).filter(Boolean))] as string[]
+    const syncStatuses = conversationIds.length > 0
+      ? await db.select({
+          conversationId: conversationSyncStatus.conversationId,
+          participantName: conversationSyncStatus.participantName,
+        }).from(conversationSyncStatus)
+          .where(inArray(conversationSyncStatus.conversationId, conversationIds))
+      : []
 
     // Build conversation name lookup (conversation_id → participant_name)
     const conversationNameMap = new Map<string, string>()
-    syncStatuses?.forEach((s) => {
-      if (s.participant_name) {
-        conversationNameMap.set(s.conversation_id, s.participant_name)
+    syncStatuses.forEach((s) => {
+      if (s.participantName && s.conversationId) {
+        conversationNameMap.set(s.conversationId, s.participantName)
       }
     })
 
     // Build user lookup map (dm_contact_mappings first, then skool_members fallback)
     const userMap = new Map<string, { username: string | null; display_name: string | null }>()
-    members?.forEach((m) => {
-      userMap.set(m.skool_user_id, {
-        username: m.skool_username,
-        display_name: m.display_name,
+    members.forEach((m) => {
+      userMap.set(m.skoolUserId, {
+        username: m.skoolUsername,
+        display_name: m.displayName,
       })
     })
     // dm_contact_mappings overwrites skool_members (higher priority)
-    mappings?.forEach((m) => {
-      userMap.set(m.skool_user_id, {
-        username: m.skool_username,
-        display_name: m.skool_display_name,
-      })
+    mappings.forEach((m) => {
+      if (m.skoolUserId) {
+        userMap.set(m.skoolUserId, {
+          username: m.skoolUsername,
+          display_name: m.skoolDisplayName,
+        })
+      }
     })
 
     // Group messages by conversation
@@ -141,7 +152,7 @@ export async function GET(request: NextRequest) {
     >()
 
     messages.forEach((msg) => {
-      const convId = msg.skool_conversation_id
+      const convId = msg.skoolConversationId || ''
       const existing = conversationMap.get(convId)
 
       if (existing) {
@@ -152,7 +163,7 @@ export async function GET(request: NextRequest) {
       } else {
         conversationMap.set(convId, {
           conversation_id: convId,
-          skool_user_id: msg.skool_user_id,
+          skool_user_id: msg.skoolUserId || '',
           messages: [msg],
           last_message: msg, // First message is most recent (sorted desc)
           pending_count: msg.status === 'pending' ? 1 : 0,
@@ -166,19 +177,19 @@ export async function GET(request: NextRequest) {
     let conversations: Conversation[] = Array.from(conversationMap.values()).map((conv) => {
       // Resolve the OTHER participant's skool_user_id (from inbound messages, not Jimmy's outbound)
       const inboundMsg = conv.messages.find((m) => m.direction === 'inbound')
-      const participantUserId = inboundMsg?.skool_user_id || conv.skool_user_id
+      const participantUserId = inboundMsg?.skoolUserId || conv.skool_user_id
 
       const userInfo = userMap.get(participantUserId)
 
       // Try sender_name from an INBOUND message that has a valid name (not "Unknown")
       const inboundMessageWithName = conv.messages.find(
-        (m) => m.direction === 'inbound' && m.sender_name && m.sender_name !== 'Unknown'
+        (m) => m.direction === 'inbound' && m.senderName && m.senderName !== 'Unknown'
       )
       // Fallback to any message with a valid sender_name
       const anyMessageWithName = conv.messages.find(
-        (m) => m.sender_name && m.sender_name !== 'Unknown'
+        (m) => m.senderName && m.senderName !== 'Unknown'
       )
-      const senderName = inboundMessageWithName?.sender_name || anyMessageWithName?.sender_name || null
+      const senderName = inboundMessageWithName?.senderName || anyMessageWithName?.senderName || null
 
       // Name from conversation_sync_status (extension-pushed from Skool API)
       const syncStatusName = conversationNameMap.get(conv.conversation_id) || null
@@ -192,9 +203,9 @@ export async function GET(request: NextRequest) {
         },
         last_message: conv.last_message
           ? {
-              text: conv.last_message.message_text,
+              text: conv.last_message.messageText,
               direction: conv.last_message.direction as 'inbound' | 'outbound',
-              created_at: conv.last_message.created_at,
+              created_at: conv.last_message.createdAt?.toISOString() || new Date().toISOString(),
             }
           : {
               text: null,
@@ -224,7 +235,6 @@ export async function GET(request: NextRequest) {
       } else if (status === 'synced') {
         conversations = conversations.filter((c) => c.pending_count === 0 && c.synced_count > 0)
       } else if (status === 'failed') {
-        // Could add failed_count tracking if needed
         conversations = conversations.filter(
           (c) => c.pending_count === 0 && c.synced_count === 0
         )

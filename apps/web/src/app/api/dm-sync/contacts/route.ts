@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createServerClient } from '@0ne/db/server'
-import { sanitizeForPostgrestFilter } from '@/lib/postgrest-utils'
+import { db, eq, desc, and, or, count, inArray, isNull, isNotNull, ilike } from '@0ne/db/server'
+import { dmContactMappings, dmMessages, dmSyncConfig, contactChannels as contactChannelsTable, skoolMembers, staffUsers as staffUsersTable } from '@0ne/db/server'
 
 export const dynamic = 'force-dynamic'
 
@@ -56,7 +56,6 @@ interface ContactActivityResponse {
  */
 export async function GET(request: NextRequest) {
   try {
-    const supabase = createServerClient()
     const { searchParams } = new URL(request.url)
 
     const search = searchParams.get('search')?.trim() || ''
@@ -72,93 +71,84 @@ export async function GET(request: NextRequest) {
     // =========================================================================
 
     // Total matched
-    const { count: matchedCount } = await supabase
-      .from('dm_contact_mappings')
-      .select('*', { count: 'exact', head: true })
-      .not('ghl_contact_id', 'is', null)
+    const [{ count: matchedCount }] = await db.select({ count: count() }).from(dmContactMappings)
+      .where(isNotNull(dmContactMappings.ghlContactId))
 
     // Total unmatched
-    const { count: unmatchedCount } = await supabase
-      .from('dm_contact_mappings')
-      .select('*', { count: 'exact', head: true })
-      .is('ghl_contact_id', null)
+    const [{ count: unmatchedCount }] = await db.select({ count: count() }).from(dmContactMappings)
+      .where(isNull(dmContactMappings.ghlContactId))
 
     // Total messages
-    const { count: totalMessages } = await supabase
-      .from('dm_messages')
-      .select('*', { count: 'exact', head: true })
+    const [{ count: totalMessages }] = await db.select({ count: count() }).from(dmMessages)
 
     // Contacts with pending
-    const { data: pendingContacts } = await supabase
-      .from('dm_messages')
-      .select('skool_user_id')
-      .eq('status', 'pending')
+    const pendingContacts = await db.select({ skoolUserId: dmMessages.skoolUserId })
+      .from(dmMessages)
+      .where(eq(dmMessages.status, 'pending'))
 
-    const uniquePending = new Set(pendingContacts?.map((m) => m.skool_user_id) || [])
+    const uniquePending = new Set(pendingContacts.map((m) => m.skoolUserId))
 
     // Contacts with failed
-    const { data: failedContacts } = await supabase
-      .from('dm_messages')
-      .select('skool_user_id')
-      .eq('status', 'failed')
+    const failedContacts = await db.select({ skoolUserId: dmMessages.skoolUserId })
+      .from(dmMessages)
+      .where(eq(dmMessages.status, 'failed'))
 
-    const uniqueFailed = new Set(failedContacts?.map((m) => m.skool_user_id) || [])
+    const uniqueFailed = new Set(failedContacts.map((m) => m.skoolUserId))
 
     const summary = {
-      total_contacts: (matchedCount || 0) + (unmatchedCount || 0),
-      matched_contacts: matchedCount || 0,
-      unmatched_contacts: unmatchedCount || 0,
-      total_messages: totalMessages || 0,
+      total_contacts: Number(matchedCount || 0) + Number(unmatchedCount || 0),
+      matched_contacts: Number(matchedCount || 0),
+      unmatched_contacts: Number(unmatchedCount || 0),
+      total_messages: Number(totalMessages || 0),
       contacts_with_pending: uniquePending.size,
       contacts_with_failed: uniqueFailed.size,
     }
 
     // =========================================================================
-    // 2. Get paginated contacts (server-side pagination via .range())
+    // 2. Get paginated contacts (server-side pagination)
     // =========================================================================
 
-    let mappingsQuery = supabase
-      .from('dm_contact_mappings')
-      .select('*', { count: 'exact' })
-      .order('created_at', { ascending: false })
+    // Build where conditions
+    const conditions: ReturnType<typeof eq>[] = []
 
-    // Apply search filter
     if (search) {
-      const safeSearch = sanitizeForPostgrestFilter(search)
-      mappingsQuery = mappingsQuery.or(
-        `skool_username.ilike.%${safeSearch}%,skool_display_name.ilike.%${safeSearch}%`
+      conditions.push(
+        or(
+          ilike(dmContactMappings.skoolUsername, `%${search}%`),
+          ilike(dmContactMappings.skoolDisplayName, `%${search}%`)
+        )!
       )
     }
 
-    // Apply match method filter
     if (matchMethod && matchMethod !== 'all') {
-      mappingsQuery = mappingsQuery.eq('match_method', matchMethod)
+      conditions.push(eq(dmContactMappings.matchMethod, matchMethod))
     }
 
-    // Apply match status filter
     if (matchStatus === 'matched') {
-      mappingsQuery = mappingsQuery.not('ghl_contact_id', 'is', null)
+      conditions.push(isNotNull(dmContactMappings.ghlContactId))
     } else if (matchStatus === 'unmatched') {
-      mappingsQuery = mappingsQuery.is('ghl_contact_id', null)
+      conditions.push(isNull(dmContactMappings.ghlContactId))
     }
 
-    // Apply contact type filter
     if (contactType && contactType !== 'all') {
-      mappingsQuery = mappingsQuery.eq('contact_type', contactType)
+      conditions.push(eq(dmContactMappings.contactType, contactType))
     }
 
-    // Server-side pagination
-    mappingsQuery = mappingsQuery.range(offset, offset + limit - 1)
+    const whereClause = conditions.length > 0 ? and(...conditions) : undefined
 
-    const { data: mappings, count: filteredCount, error: mappingsError } = await mappingsQuery
+    // Get total filtered count
+    const [{ count: filteredCount }] = await db.select({ count: count() }).from(dmContactMappings)
+      .where(whereClause)
 
-    if (mappingsError) {
-      console.error('[Contacts API] GET mappings error:', mappingsError)
-      return NextResponse.json({ error: mappingsError.message }, { status: 500 })
-    }
+    // Get paginated results
+    const mappings = await db.select().from(dmContactMappings)
+      .where(whereClause)
+      .orderBy(desc(dmContactMappings.createdAt))
+      .limit(limit)
+      .offset(offset)
 
-    if (!mappings || mappings.length === 0) {
-      return NextResponse.json({ contacts: [], summary, total: filteredCount || 0 } as ContactActivityResponse)
+    if (mappings.length === 0) {
+      return NextResponse.json({ contacts: [], summary, total: Number(filteredCount || 0) } as ContactActivityResponse)
     }
 
     // =========================================================================
@@ -166,51 +156,68 @@ export async function GET(request: NextRequest) {
     // =========================================================================
 
     // Get sync config for ghl_location_id and skool_community_slug
-    const userIds = [...new Set(mappings.map((m) => m.clerk_user_id))]
-    const { data: syncConfigs } = await supabase
-      .from('dm_sync_config')
-      .select('clerk_user_id, ghl_location_id, skool_community_slug')
-      .in('clerk_user_id', userIds)
+    const userIds = [...new Set(mappings.map((m) => m.clerkUserId).filter(Boolean))] as string[]
+    const syncConfigs = userIds.length > 0
+      ? await db.select({
+          clerkUserId: dmSyncConfig.clerkUserId,
+          ghlLocationId: dmSyncConfig.ghlLocationId,
+          skoolCommunitySlug: dmSyncConfig.skoolCommunitySlug,
+        }).from(dmSyncConfig).where(inArray(dmSyncConfig.clerkUserId, userIds))
+      : []
 
     const configMap = new Map<string, { ghl_location_id: string; skool_community_slug: string }>()
-    syncConfigs?.forEach((config) => {
-      configMap.set(config.clerk_user_id, {
-        ghl_location_id: config.ghl_location_id,
-        skool_community_slug: config.skool_community_slug,
-      })
+    syncConfigs.forEach((config) => {
+      if (config.clerkUserId) {
+        configMap.set(config.clerkUserId, {
+          ghl_location_id: config.ghlLocationId || '',
+          skool_community_slug: config.skoolCommunitySlug || '',
+        })
+      }
     })
 
     // Only fetch messages for this page's contacts (max 50 IDs, efficient)
-    const pageSkoolUserIds = mappings.map((m) => m.skool_user_id)
+    const pageSkoolUserIds = mappings.map((m) => m.skoolUserId).filter(Boolean) as string[]
 
-    const { data: messages } = await supabase
-      .from('dm_messages')
-      .select('skool_user_id, direction, status, created_at, skool_conversation_id')
-      .in('skool_user_id', pageSkoolUserIds)
+    const messages = pageSkoolUserIds.length > 0
+      ? await db.select({
+          skoolUserId: dmMessages.skoolUserId,
+          direction: dmMessages.direction,
+          status: dmMessages.status,
+          createdAt: dmMessages.createdAt,
+          skoolConversationId: dmMessages.skoolConversationId,
+        }).from(dmMessages).where(inArray(dmMessages.skoolUserId, pageSkoolUserIds))
+      : []
 
     // Fetch contact_channels for this page's contacts
-    const { data: contactChannels } = await supabase
-      .from('contact_channels')
-      .select('skool_user_id, staff_skool_id, skool_channel_id')
-      .in('skool_user_id', pageSkoolUserIds)
+    const contactChannelsData = pageSkoolUserIds.length > 0
+      ? await db.select({
+          skoolUserId: contactChannelsTable.skoolUserId,
+          staffSkoolId: contactChannelsTable.staffSkoolId,
+          skoolChannelId: contactChannelsTable.skoolChannelId,
+        }).from(contactChannelsTable).where(inArray(contactChannelsTable.skoolUserId, pageSkoolUserIds))
+      : []
 
     // Fetch survey_answers, email, phone from skool_members for this page's contacts
-    const { data: memberData } = await supabase
-      .from('skool_members')
-      .select('skool_user_id, survey_answers, email, phone')
-      .in('skool_user_id', pageSkoolUserIds)
+    const memberData = pageSkoolUserIds.length > 0
+      ? await db.select({
+          skoolUserId: skoolMembers.skoolUserId,
+          surveyAnswers: skoolMembers.surveyAnswers,
+          email: skoolMembers.email,
+          phone: skoolMembers.phone,
+        }).from(skoolMembers).where(inArray(skoolMembers.skoolUserId, pageSkoolUserIds))
+      : []
 
     const surveyMap = new Map<string, Array<{ question: string; answer: string }> | null>()
     const memberEmailMap = new Map<string, string | null>()
     const memberPhoneMap = new Map<string, string | null>()
-    memberData?.forEach((m) => {
+    memberData.forEach((m) => {
       // Normalize: survey data can be array directly or nested {survey: [...]}
-      let answers = m.survey_answers as unknown
+      let answers = m.surveyAnswers as unknown
       if (answers && typeof answers === 'object' && !Array.isArray(answers) && 'survey' in (answers as Record<string, unknown>)) {
         answers = (answers as { survey: unknown }).survey
       }
       const normalizedAnswers = Array.isArray(answers) ? answers as Array<{ question: string; answer: string }> : null
-      surveyMap.set(m.skool_user_id, normalizedAnswers)
+      surveyMap.set(m.skoolUserId, normalizedAnswers)
 
       // Email: use stored email, or extract from survey answers on-the-fly
       let email = m.email || null
@@ -223,7 +230,7 @@ export async function GET(request: NextRequest) {
           }
         }
       }
-      memberEmailMap.set(m.skool_user_id, email)
+      memberEmailMap.set(m.skoolUserId, email)
 
       // Phone: use stored phone, or extract from survey answers on-the-fly
       let phone = m.phone || null
@@ -240,32 +247,33 @@ export async function GET(request: NextRequest) {
           }
         }
       }
-      memberPhoneMap.set(m.skool_user_id, phone)
+      memberPhoneMap.set(m.skoolUserId, phone)
     })
 
     // Build channels map per user (with staff display name lookup)
     const channelsMap = new Map<string, ContactChannelInfo[]>()
 
     // Get staff display names
-    const staffIds = [...new Set(contactChannels?.map((c) => c.staff_skool_id) || [])]
+    const staffIds = [...new Set(contactChannelsData.map((c) => c.staffSkoolId).filter(Boolean))] as string[]
     const staffNameMap = new Map<string, string | null>()
     if (staffIds.length > 0) {
-      const { data: staffUsers } = await supabase
-        .from('staff_users')
-        .select('skool_user_id, display_name')
-        .in('skool_user_id', staffIds)
+      const staffData = await db.select({
+        skoolUserId: staffUsersTable.skoolUserId,
+        displayName: staffUsersTable.displayName,
+      }).from(staffUsersTable).where(inArray(staffUsersTable.skoolUserId, staffIds))
 
-      staffUsers?.forEach((s) => staffNameMap.set(s.skool_user_id, s.display_name))
+      staffData.forEach((s) => staffNameMap.set(s.skoolUserId, s.displayName))
     }
 
-    contactChannels?.forEach((ch) => {
-      const existing = channelsMap.get(ch.skool_user_id) || []
+    contactChannelsData.forEach((ch) => {
+      if (!ch.skoolUserId) return
+      const existing = channelsMap.get(ch.skoolUserId) || []
       existing.push({
-        staff_skool_id: ch.staff_skool_id,
-        skool_channel_id: ch.skool_channel_id,
-        staff_display_name: staffNameMap.get(ch.staff_skool_id) || null,
+        staff_skool_id: ch.staffSkoolId || '',
+        skool_channel_id: ch.skoolChannelId || '',
+        staff_display_name: ch.staffSkoolId ? staffNameMap.get(ch.staffSkoolId) || null : null,
       })
-      channelsMap.set(ch.skool_user_id, existing)
+      channelsMap.set(ch.skoolUserId, existing)
     })
 
     // Aggregate message stats per user
@@ -281,9 +289,10 @@ export async function GET(request: NextRequest) {
     // Build conversation ID map (most recent per user)
     const conversationMap = new Map<string, string>()
 
-    messages?.forEach((msg) => {
+    messages.forEach((msg) => {
+      if (!msg.skoolUserId) return
       // Stats
-      const existing = statsMap.get(msg.skool_user_id) || {
+      const existing = statsMap.get(msg.skoolUserId) || {
         inbound_count: 0, outbound_count: 0,
         synced_count: 0, pending_count: 0, failed_count: 0,
         last_activity_at: null,
@@ -296,17 +305,18 @@ export async function GET(request: NextRequest) {
       else if (msg.status === 'pending') existing.pending_count++
       else if (msg.status === 'failed') existing.failed_count++
 
-      if (!existing.last_activity_at || msg.created_at > existing.last_activity_at) {
-        existing.last_activity_at = msg.created_at
+      const createdAtStr = msg.createdAt?.toISOString() || null
+      if (createdAtStr && (!existing.last_activity_at || createdAtStr > existing.last_activity_at)) {
+        existing.last_activity_at = createdAtStr
       }
 
-      statsMap.set(msg.skool_user_id, existing)
+      statsMap.set(msg.skoolUserId, existing)
 
       // Conversation ID (most recent)
-      if (msg.skool_conversation_id) {
-        const currentConvo = conversationMap.get(msg.skool_user_id)
+      if (msg.skoolConversationId) {
+        const currentConvo = conversationMap.get(msg.skoolUserId)
         if (!currentConvo) {
-          conversationMap.set(msg.skool_user_id, msg.skool_conversation_id)
+          conversationMap.set(msg.skoolUserId, msg.skoolConversationId)
         }
       }
     })
@@ -316,29 +326,30 @@ export async function GET(request: NextRequest) {
     // =========================================================================
 
     let contactsWithStats: ContactActivity[] = mappings.map((mapping) => {
-      const stats = statsMap.get(mapping.skool_user_id) || {
+      const skoolUserId = mapping.skoolUserId || ''
+      const stats = statsMap.get(skoolUserId) || {
         inbound_count: 0, outbound_count: 0,
         synced_count: 0, pending_count: 0, failed_count: 0,
         last_activity_at: null,
       }
 
-      const config = configMap.get(mapping.clerk_user_id)
+      const config = mapping.clerkUserId ? configMap.get(mapping.clerkUserId) : undefined
 
       return {
         id: mapping.id,
-        skool_user_id: mapping.skool_user_id,
-        skool_username: mapping.skool_username,
-        skool_display_name: mapping.skool_display_name,
-        ghl_contact_id: mapping.ghl_contact_id,
-        match_method: mapping.match_method as ContactActivity['match_method'],
-        email: mapping.email || memberEmailMap.get(mapping.skool_user_id) || null,
-        phone: mapping.phone || memberPhoneMap.get(mapping.skool_user_id) || null,
-        contact_type: mapping.contact_type || null,
-        created_at: mapping.created_at,
-        skool_conversation_id: conversationMap.get(mapping.skool_user_id) || null,
-        channels: channelsMap.get(mapping.skool_user_id) || [],
+        skool_user_id: skoolUserId,
+        skool_username: mapping.skoolUsername,
+        skool_display_name: mapping.skoolDisplayName,
+        ghl_contact_id: mapping.ghlContactId,
+        match_method: mapping.matchMethod as ContactActivity['match_method'],
+        email: mapping.email || memberEmailMap.get(skoolUserId) || null,
+        phone: mapping.phone || memberPhoneMap.get(skoolUserId) || null,
+        contact_type: (mapping.contactType as ContactActivity['contact_type']) || null,
+        created_at: mapping.createdAt?.toISOString() || new Date().toISOString(),
+        skool_conversation_id: conversationMap.get(skoolUserId) || null,
+        channels: channelsMap.get(skoolUserId) || [],
         stats,
-        survey_answers: surveyMap.get(mapping.skool_user_id) || null,
+        survey_answers: surveyMap.get(skoolUserId) || null,
         ghl_location_id: config?.ghl_location_id || '',
         skool_community_slug: config?.skool_community_slug || '',
       }
@@ -357,7 +368,7 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    return NextResponse.json({ contacts: contactsWithStats, summary, total: filteredCount || 0 } as ContactActivityResponse)
+    return NextResponse.json({ contacts: contactsWithStats, summary, total: Number(filteredCount || 0) } as ContactActivityResponse)
   } catch (error) {
     console.error('[Contacts API] GET exception:', error)
     return NextResponse.json(

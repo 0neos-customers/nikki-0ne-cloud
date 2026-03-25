@@ -13,7 +13,8 @@
 
 import { NextResponse } from 'next/server'
 import { auth } from '@clerk/nextjs/server'
-import { createServerClient } from '@0ne/db/server'
+import { db, eq, gte, lte, and, count } from '@0ne/db/server'
+import { ghlTransactions } from '@0ne/db/server'
 import { getLatestRevenueSnapshot, getRevenueHistory, getMrrChange } from '@/features/skool/lib/revenue-sync'
 
 export const dynamic = 'force-dynamic'
@@ -130,35 +131,41 @@ export async function GET(request: Request) {
     // Query synced transactions from ghl_transactions table
     // Data synced via /api/cron/sync-ghl-payments
 
-    const supabase = createServerClient()
-
     // Get one-time revenue for current period
-    const { data: currentTransactions } = await supabase
-      .from('ghl_transactions')
-      .select('amount')
-      .eq('status', 'succeeded')
-      .gte('transaction_date', startDate)
-      .lte('transaction_date', `${endDate}T23:59:59`)
+    const currentTransactions = await db
+      .select({ amount: ghlTransactions.amount })
+      .from(ghlTransactions)
+      .where(
+        and(
+          eq(ghlTransactions.status, 'succeeded'),
+          gte(ghlTransactions.transactionDate, new Date(`${startDate}T00:00:00Z`)),
+          lte(ghlTransactions.transactionDate, new Date(`${endDate}T23:59:59Z`)),
+        )
+      )
 
-    const oneTimeCurrent = currentTransactions?.reduce((sum, t) => sum + Number(t.amount), 0) || 0
+    const oneTimeCurrent = currentTransactions.reduce((sum, t) => sum + Number(t.amount), 0)
 
     // Get one-time revenue for previous period (for comparison)
-    const { data: previousTransactions } = await supabase
-      .from('ghl_transactions')
-      .select('amount')
-      .eq('status', 'succeeded')
-      .gte('transaction_date', previousStartDate)
-      .lte('transaction_date', `${previousEndDate}T23:59:59`)
+    const previousTransactions = await db
+      .select({ amount: ghlTransactions.amount })
+      .from(ghlTransactions)
+      .where(
+        and(
+          eq(ghlTransactions.status, 'succeeded'),
+          gte(ghlTransactions.transactionDate, new Date(`${previousStartDate}T00:00:00Z`)),
+          lte(ghlTransactions.transactionDate, new Date(`${previousEndDate}T23:59:59Z`)),
+        )
+      )
 
-    const oneTimePrevious = previousTransactions?.reduce((sum, t) => sum + Number(t.amount), 0) || 0
+    const oneTimePrevious = previousTransactions.reduce((sum, t) => sum + Number(t.amount), 0)
 
     const oneTimeChange = oneTimeCurrent - oneTimePrevious
     const oneTimeChangePercent = calculateChange(oneTimeCurrent, oneTimePrevious)
 
     // Check if we have any transactions (to show appropriate message)
-    const { count: transactionCount } = await supabase
-      .from('ghl_transactions')
-      .select('*', { count: 'exact', head: true })
+    const [{ value: transactionCount }] = await db
+      .select({ value: count() })
+      .from(ghlTransactions)
 
     const hasTransactionData = (transactionCount || 0) > 0
 
@@ -189,15 +196,22 @@ export async function GET(request: Request) {
     }
 
     // Add one-time revenue from GHL transactions
-    const { data: monthlyTransactions } = await supabase
-      .from('ghl_transactions')
-      .select('amount, transaction_date')
-      .eq('status', 'succeeded')
-      .gte('transaction_date', startDate)
-      .lte('transaction_date', `${endDate}T23:59:59`)
+    const monthlyTransactions = await db
+      .select({
+        amount: ghlTransactions.amount,
+        transactionDate: ghlTransactions.transactionDate,
+      })
+      .from(ghlTransactions)
+      .where(
+        and(
+          eq(ghlTransactions.status, 'succeeded'),
+          gte(ghlTransactions.transactionDate, new Date(`${startDate}T00:00:00Z`)),
+          lte(ghlTransactions.transactionDate, new Date(`${endDate}T23:59:59Z`)),
+        )
+      )
 
-    for (const txn of monthlyTransactions || []) {
-      const month = txn.transaction_date.substring(0, 7) // YYYY-MM
+    for (const txn of monthlyTransactions) {
+      const month = txn.transactionDate!.toISOString().substring(0, 7) // YYYY-MM
       if (!monthlyMap.has(month)) {
         monthlyMap.set(month, { total: 0, oneTime: 0, recurring: 0 })
       }

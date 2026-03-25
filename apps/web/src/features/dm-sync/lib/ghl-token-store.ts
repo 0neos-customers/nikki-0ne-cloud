@@ -8,7 +8,8 @@
  * @module dm-sync/lib/ghl-token-store
  */
 
-import { createServerClient } from '@0ne/db/server'
+import { db, eq } from '@0ne/db/server'
+import { dmSyncConfig } from '@0ne/db/server'
 
 // =============================================================================
 // TYPES
@@ -48,27 +49,27 @@ export interface TokenUpdate {
 export async function getStoredTokens(
   userId: string
 ): Promise<StoredTokens | null> {
-  const supabase = createServerClient()
+  const [data] = await db.select({
+    ghlAccessToken: dmSyncConfig.ghlAccessToken,
+    ghlRefreshToken: dmSyncConfig.ghlRefreshToken,
+    ghlTokenExpiresAt: dmSyncConfig.ghlTokenExpiresAt,
+  }).from(dmSyncConfig)
+    .where(eq(dmSyncConfig.clerkUserId, userId))
+    .limit(1)
 
-  const { data, error } = await supabase
-    .from('dm_sync_config')
-    .select('ghl_access_token, ghl_refresh_token, ghl_token_expires_at')
-    .eq('clerk_user_id', userId)
-    .single()
-
-  if (error || !data) {
+  if (!data) {
     console.log(`[GHL Token Store] No config found for user: ${userId}`)
     return null
   }
 
   // Check if tokens exist in database
-  if (data.ghl_refresh_token) {
+  if (data.ghlRefreshToken) {
     console.log('[GHL Token Store] Using tokens from database')
     return {
-      accessToken: data.ghl_access_token || '',
-      refreshToken: data.ghl_refresh_token,
-      expiresAt: data.ghl_token_expires_at
-        ? new Date(data.ghl_token_expires_at)
+      accessToken: data.ghlAccessToken || '',
+      refreshToken: data.ghlRefreshToken,
+      expiresAt: data.ghlTokenExpiresAt
+        ? new Date(data.ghlTokenExpiresAt)
         : new Date(0),
     }
   }
@@ -105,8 +106,6 @@ export async function saveTokens(
   userId: string,
   tokens: TokenUpdate
 ): Promise<void> {
-  const supabase = createServerClient()
-
   const expiresAt = new Date(Date.now() + tokens.expiresIn * 1000)
 
   console.log('[GHL Token Store] Saving new tokens to database', {
@@ -116,19 +115,18 @@ export async function saveTokens(
     expiresAt: expiresAt.toISOString(),
   })
 
-  const { error } = await supabase
-    .from('dm_sync_config')
-    .update({
-      ghl_access_token: tokens.accessToken,
-      ghl_refresh_token: tokens.refreshToken,
-      ghl_token_expires_at: expiresAt.toISOString(),
-      updated_at: new Date().toISOString(),
-    })
-    .eq('clerk_user_id', userId)
-
-  if (error) {
-    console.error('[GHL Token Store] Failed to save tokens:', error.message)
-    throw new Error(`Failed to save GHL tokens: ${error.message}`)
+  try {
+    await db.update(dmSyncConfig)
+      .set({
+        ghlAccessToken: tokens.accessToken,
+        ghlRefreshToken: tokens.refreshToken,
+        ghlTokenExpiresAt: expiresAt,
+        updatedAt: new Date(),
+      })
+      .where(eq(dmSyncConfig.clerkUserId, userId))
+  } catch (error) {
+    console.error('[GHL Token Store] Failed to save tokens:', String(error))
+    throw new Error(`Failed to save GHL tokens: ${String(error)}`)
   }
 
   console.log('[GHL Token Store] Tokens saved successfully')
@@ -156,21 +154,18 @@ export function tokensNeedRefresh(
  * @param userId - The user ID
  */
 export async function clearTokens(userId: string): Promise<void> {
-  const supabase = createServerClient()
-
-  const { error } = await supabase
-    .from('dm_sync_config')
-    .update({
-      ghl_access_token: null,
-      ghl_refresh_token: null,
-      ghl_token_expires_at: null,
-      updated_at: new Date().toISOString(),
-    })
-    .eq('clerk_user_id', userId)
-
-  if (error) {
-    console.error('[GHL Token Store] Failed to clear tokens:', error.message)
-    throw new Error(`Failed to clear GHL tokens: ${error.message}`)
+  try {
+    await db.update(dmSyncConfig)
+      .set({
+        ghlAccessToken: null,
+        ghlRefreshToken: null,
+        ghlTokenExpiresAt: null,
+        updatedAt: new Date(),
+      })
+      .where(eq(dmSyncConfig.clerkUserId, userId))
+  } catch (error) {
+    console.error('[GHL Token Store] Failed to clear tokens:', String(error))
+    throw new Error(`Failed to clear GHL tokens: ${String(error)}`)
   }
 
   console.log('[GHL Token Store] Tokens cleared for user:', userId)

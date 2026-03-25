@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createServerClient } from '@0ne/db/server'
-import { sanitizeForPostgrestFilter } from '@/lib/postgrest-utils'
+import { db, eq, desc, and, or, count, inArray, ilike } from '@0ne/db/server'
+import { dmMessages, dmContactMappings, dmSyncConfig } from '@0ne/db/server'
 
 export const dynamic = 'force-dynamic'
 
@@ -46,7 +46,6 @@ interface RawMessagesResponse {
  */
 export async function GET(request: NextRequest) {
   try {
-    const supabase = createServerClient()
     const { searchParams } = new URL(request.url)
 
     const search = searchParams.get('search')?.trim() || ''
@@ -56,101 +55,111 @@ export async function GET(request: NextRequest) {
     const limit = Math.min(parseInt(searchParams.get('limit') || '50', 10), 200)
     const offset = parseInt(searchParams.get('offset') || '0', 10)
 
-    // Build query
-    let query = supabase
-      .from('dm_messages')
-      .select('*', { count: 'exact' })
-      .order('created_at', { ascending: false })
+    // Build where conditions
+    const conditions: ReturnType<typeof eq>[] = []
 
-    // Apply filters
     if (search) {
-      const safeSearch = sanitizeForPostgrestFilter(search)
-      query = query.or(`message_text.ilike.%${safeSearch}%,sender_name.ilike.%${safeSearch}%`)
+      conditions.push(
+        or(
+          ilike(dmMessages.messageText, `%${search}%`),
+          ilike(dmMessages.senderName, `%${search}%`)
+        )!
+      )
     }
 
     if (direction && direction !== 'all') {
-      query = query.eq('direction', direction)
+      conditions.push(eq(dmMessages.direction, direction))
     }
 
     if (status && status !== 'all') {
-      query = query.eq('status', status)
+      conditions.push(eq(dmMessages.status, status))
     }
 
     if (conversationId) {
-      query = query.eq('skool_conversation_id', conversationId)
+      conditions.push(eq(dmMessages.skoolConversationId, conversationId))
     }
 
-    // Apply pagination
-    query = query.range(offset, offset + limit - 1)
+    const whereClause = conditions.length > 0 ? and(...conditions) : undefined
 
-    const { data: messages, count, error } = await query
+    // Get filtered count
+    const [{ count: filteredCount }] = await db.select({ count: count() }).from(dmMessages)
+      .where(whereClause)
 
-    if (error) {
-      console.error('[Raw Messages API] GET error:', error)
-      return NextResponse.json({ error: error.message }, { status: 500 })
-    }
+    // Get paginated results
+    const messages = await db.select().from(dmMessages)
+      .where(whereClause)
+      .orderBy(desc(dmMessages.createdAt))
+      .limit(limit)
+      .offset(offset)
 
     // Get summary stats (unfiltered totals for dashboard)
-    const { data: allMessages } = await supabase
-      .from('dm_messages')
-      .select('direction, status')
+    const allMessages = await db.select({
+      direction: dmMessages.direction,
+      status: dmMessages.status,
+    }).from(dmMessages)
 
     const summary = {
-      total: allMessages?.length || 0,
-      inbound: allMessages?.filter((m) => m.direction === 'inbound').length || 0,
-      outbound: allMessages?.filter((m) => m.direction === 'outbound').length || 0,
-      synced: allMessages?.filter((m) => m.status === 'synced').length || 0,
-      pending: allMessages?.filter((m) => m.status === 'pending').length || 0,
-      failed: allMessages?.filter((m) => m.status === 'failed').length || 0,
+      total: allMessages.length,
+      inbound: allMessages.filter((m) => m.direction === 'inbound').length,
+      outbound: allMessages.filter((m) => m.direction === 'outbound').length,
+      synced: allMessages.filter((m) => m.status === 'synced').length,
+      pending: allMessages.filter((m) => m.status === 'pending').length,
+      failed: allMessages.filter((m) => m.status === 'failed').length,
     }
 
     // Enrich messages with contact mapping and sync config data
-    if (messages && messages.length > 0) {
+    if (messages.length > 0) {
       // Get unique skool_user_ids and user_ids
-      const skoolUserIds = [...new Set(messages.map((m) => m.skool_user_id))]
-      const userIds = [...new Set(messages.map((m) => m.clerk_user_id))]
+      const skoolUserIds = [...new Set(messages.map((m) => m.skoolUserId).filter(Boolean))] as string[]
+      const userIds = [...new Set(messages.map((m) => m.clerkUserId).filter(Boolean))] as string[]
 
       // Get contact mappings for these users
-      const { data: mappings } = await supabase
-        .from('dm_contact_mappings')
-        .select('skool_user_id, skool_username, ghl_contact_id')
-        .in('skool_user_id', skoolUserIds)
+      const mappings = skoolUserIds.length > 0
+        ? await db.select({
+            skoolUserId: dmContactMappings.skoolUserId,
+            skoolUsername: dmContactMappings.skoolUsername,
+            ghlContactId: dmContactMappings.ghlContactId,
+          }).from(dmContactMappings).where(inArray(dmContactMappings.skoolUserId, skoolUserIds))
+        : []
 
       // Get sync configs for location and community slug
-      const { data: configs } = await supabase
-        .from('dm_sync_config')
-        .select('clerk_user_id, ghl_location_id, skool_community_slug')
-        .in('clerk_user_id', userIds)
+      const configs = userIds.length > 0
+        ? await db.select({
+            clerkUserId: dmSyncConfig.clerkUserId,
+            ghlLocationId: dmSyncConfig.ghlLocationId,
+            skoolCommunitySlug: dmSyncConfig.skoolCommunitySlug,
+          }).from(dmSyncConfig).where(inArray(dmSyncConfig.clerkUserId, userIds))
+        : []
 
       // Build lookup maps
       const mappingMap = new Map(
-        mappings?.map((m) => [m.skool_user_id, m]) || []
+        mappings.map((m) => [m.skoolUserId, m])
       )
       const configMap = new Map(
-        configs?.map((c) => [c.clerk_user_id, c]) || []
+        configs.map((c) => [c.clerkUserId, c])
       )
 
       // Enrich messages
       const enrichedMessages: RawMessage[] = messages.map((msg) => {
-        const mapping = mappingMap.get(msg.skool_user_id)
-        const config = configMap.get(msg.clerk_user_id)
+        const mapping = msg.skoolUserId ? mappingMap.get(msg.skoolUserId) : undefined
+        const config = msg.clerkUserId ? configMap.get(msg.clerkUserId) : undefined
 
         return {
           id: msg.id,
-          skool_conversation_id: msg.skool_conversation_id,
-          skool_message_id: msg.skool_message_id,
-          skool_user_id: msg.skool_user_id,
-          sender_name: msg.sender_name,
-          skool_username: mapping?.skool_username || null,
-          direction: msg.direction,
-          message_text: msg.message_text,
-          status: msg.status,
-          ghl_message_id: msg.ghl_message_id,
-          ghl_contact_id: mapping?.ghl_contact_id || null,
-          ghl_location_id: config?.ghl_location_id || null,
-          skool_community_slug: config?.skool_community_slug || null,
-          created_at: msg.created_at,
-          synced_at: msg.synced_at,
+          skool_conversation_id: msg.skoolConversationId || '',
+          skool_message_id: msg.skoolMessageId || '',
+          skool_user_id: msg.skoolUserId || '',
+          sender_name: msg.senderName,
+          skool_username: mapping?.skoolUsername || null,
+          direction: msg.direction as 'inbound' | 'outbound',
+          message_text: msg.messageText,
+          status: msg.status as 'synced' | 'pending' | 'failed',
+          ghl_message_id: msg.ghlMessageId,
+          ghl_contact_id: mapping?.ghlContactId || null,
+          ghl_location_id: config?.ghlLocationId || null,
+          skool_community_slug: config?.skoolCommunitySlug || null,
+          created_at: msg.createdAt?.toISOString() || new Date().toISOString(),
+          synced_at: msg.syncedAt?.toISOString() || null,
         }
       })
 
@@ -160,7 +169,7 @@ export async function GET(request: NextRequest) {
         pagination: {
           limit,
           offset,
-          hasMore: (count || 0) > offset + limit,
+          hasMore: Number(filteredCount || 0) > offset + limit,
         },
       } as RawMessagesResponse)
     }

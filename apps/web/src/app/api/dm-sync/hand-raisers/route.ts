@@ -1,18 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { auth } from '@clerk/nextjs/server'
-import { createServerClient } from '@0ne/db/server'
+import { db, eq, desc, inArray } from '@0ne/db/server'
+import { dmHandRaiserCampaigns, dmHandRaiserSent } from '@0ne/db/server'
 
 export const dynamic = 'force-dynamic'
 
 interface HandRaiserCampaignWithStats {
   id: string
-  clerk_user_id: string
+  clerk_user_id: string | null
   post_url: string
   skool_post_id: string | null
   keyword_filter: string | null
-  dm_template: string | null  // Now optional - if null, only tags GHL (no DM sent)
+  dm_template: string | null
   ghl_tag: string | null
-  is_active: boolean
+  is_active: boolean | null
   created_at: string
   updated_at: string
   stats: {
@@ -27,36 +28,29 @@ interface HandRaiserCampaignWithStats {
  */
 export async function GET(request: NextRequest) {
   try {
-    const supabase = createServerClient()
     const { searchParams } = new URL(request.url)
     const activeOnly = searchParams.get('active_only') === 'true'
 
-    let query = supabase
-      .from('dm_hand_raiser_campaigns')
-      .select('*')
-      .order('created_at', { ascending: false })
-
+    const conditions: ReturnType<typeof eq>[] = []
     if (activeOnly) {
-      query = query.eq('is_active', true)
+      conditions.push(eq(dmHandRaiserCampaigns.isActive, true))
     }
 
-    const { data, error } = await query
-
-    if (error) {
-      console.error('[Hand-Raisers API] GET error:', error)
-      return NextResponse.json({ error: error.message }, { status: 500 })
-    }
+    const data = await db.select().from(dmHandRaiserCampaigns)
+      .where(conditions.length > 0 ? conditions[0] : undefined)
+      .orderBy(desc(dmHandRaiserCampaigns.createdAt))
 
     // Get stats for each campaign
     let campaignsWithStats: HandRaiserCampaignWithStats[] = []
-    if (data && data.length > 0) {
+    if (data.length > 0) {
       const campaignIds = data.map((c) => c.id)
 
       // Get sent DMs for each campaign
-      const { data: sentDms } = await supabase
-        .from('dm_hand_raiser_sent')
-        .select('campaign_id, sent_at')
-        .in('campaign_id', campaignIds)
+      const sentDms = await db.select({
+        campaignId: dmHandRaiserSent.campaignId,
+        sentAt: dmHandRaiserSent.sentAt,
+      }).from(dmHandRaiserSent)
+        .where(inArray(dmHandRaiserSent.campaignId, campaignIds))
 
       // Aggregate stats
       const statsMap = new Map<
@@ -64,22 +58,31 @@ export async function GET(request: NextRequest) {
         { sent_count: number; last_sent_at: string | null }
       >()
 
-      sentDms?.forEach((dm) => {
-        if (!dm.campaign_id) return
-        const existing = statsMap.get(dm.campaign_id) || {
+      sentDms.forEach((dm) => {
+        if (!dm.campaignId) return
+        const existing = statsMap.get(dm.campaignId) || {
           sent_count: 0,
           last_sent_at: null,
         }
         existing.sent_count++
-        // Track most recent sent_at
-        if (!existing.last_sent_at || dm.sent_at > existing.last_sent_at) {
-          existing.last_sent_at = dm.sent_at
+        const sentAtStr = dm.sentAt?.toISOString() || null
+        if (sentAtStr && (!existing.last_sent_at || sentAtStr > existing.last_sent_at)) {
+          existing.last_sent_at = sentAtStr
         }
-        statsMap.set(dm.campaign_id, existing)
+        statsMap.set(dm.campaignId, existing)
       })
 
       campaignsWithStats = data.map((campaign) => ({
-        ...campaign,
+        id: campaign.id,
+        clerk_user_id: campaign.clerkUserId,
+        post_url: campaign.postUrl,
+        skool_post_id: campaign.skoolPostId,
+        keyword_filter: campaign.keywordFilter,
+        dm_template: campaign.dmTemplate,
+        ghl_tag: campaign.ghlTag,
+        is_active: campaign.isActive,
+        created_at: campaign.createdAt?.toISOString() || new Date().toISOString(),
+        updated_at: campaign.updatedAt?.toISOString() || new Date().toISOString(),
         stats: statsMap.get(campaign.id) || { sent_count: 0, last_sent_at: null },
       }))
     }
@@ -105,35 +108,22 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    const supabase = createServerClient()
     const body = await request.json()
 
     // Validate required fields
     if (!body.post_url) {
       return NextResponse.json({ error: 'Missing required field: post_url' }, { status: 400 })
     }
-    // dm_template is now OPTIONAL:
-    // - With template: Tags GHL + queues DM for extension to send
-    // - Without template: Tags GHL only (use GHL workflows for messaging)
 
-    const { data, error } = await supabase
-      .from('dm_hand_raiser_campaigns')
-      .insert({
-        clerk_user_id: userId,
-        post_url: body.post_url,
-        skool_post_id: body.skool_post_id || null,
-        keyword_filter: body.keyword_filter || null,
-        dm_template: body.dm_template || null,  // Optional - can be null
-        ghl_tag: body.ghl_tag || null,
-        is_active: body.is_active ?? true,
-      })
-      .select()
-      .single()
-
-    if (error) {
-      console.error('[Hand-Raisers API] POST error:', error)
-      return NextResponse.json({ error: error.message }, { status: 500 })
-    }
+    const [data] = await db.insert(dmHandRaiserCampaigns).values({
+      clerkUserId: userId,
+      postUrl: body.post_url,
+      skoolPostId: body.skool_post_id || null,
+      keywordFilter: body.keyword_filter || null,
+      dmTemplate: body.dm_template || null,
+      ghlTag: body.ghl_tag || null,
+      isActive: body.is_active ?? true,
+    }).returning()
 
     return NextResponse.json({ campaign: data }, { status: 201 })
   } catch (error) {
@@ -151,7 +141,6 @@ export async function POST(request: NextRequest) {
  */
 export async function PUT(request: NextRequest) {
   try {
-    const supabase = createServerClient()
     const body = await request.json()
     const { id, ...updates } = body
 
@@ -159,17 +148,19 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ error: 'Missing id' }, { status: 400 })
     }
 
-    const { data, error } = await supabase
-      .from('dm_hand_raiser_campaigns')
-      .update({ ...updates, updated_at: new Date().toISOString() })
-      .eq('id', id)
-      .select()
-      .single()
+    // Map snake_case body keys to camelCase schema keys
+    const setData: Record<string, unknown> = { updatedAt: new Date() }
+    if (updates.post_url !== undefined) setData.postUrl = updates.post_url
+    if (updates.skool_post_id !== undefined) setData.skoolPostId = updates.skool_post_id
+    if (updates.keyword_filter !== undefined) setData.keywordFilter = updates.keyword_filter
+    if (updates.dm_template !== undefined) setData.dmTemplate = updates.dm_template
+    if (updates.ghl_tag !== undefined) setData.ghlTag = updates.ghl_tag
+    if (updates.is_active !== undefined) setData.isActive = updates.is_active
 
-    if (error) {
-      console.error('[Hand-Raisers API] PUT error:', error)
-      return NextResponse.json({ error: error.message }, { status: 500 })
-    }
+    const [data] = await db.update(dmHandRaiserCampaigns)
+      .set(setData)
+      .where(eq(dmHandRaiserCampaigns.id, id))
+      .returning()
 
     if (!data) {
       return NextResponse.json({ error: 'Campaign not found' }, { status: 404 })
@@ -191,7 +182,6 @@ export async function PUT(request: NextRequest) {
  */
 export async function DELETE(request: NextRequest) {
   try {
-    const supabase = createServerClient()
     const { searchParams } = new URL(request.url)
     const id = searchParams.get('id')
 
@@ -199,11 +189,11 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json({ error: 'Missing id query parameter' }, { status: 400 })
     }
 
-    const { error } = await supabase.from('dm_hand_raiser_campaigns').delete().eq('id', id)
-
-    if (error) {
-      console.error('[Hand-Raisers API] DELETE error:', error)
-      return NextResponse.json({ error: error.message }, { status: 500 })
+    try {
+      await db.delete(dmHandRaiserCampaigns).where(eq(dmHandRaiserCampaigns.id, id))
+    } catch (err) {
+      console.error('[Hand-Raisers API] DELETE error:', err)
+      return NextResponse.json({ error: String(err) }, { status: 500 })
     }
 
     return NextResponse.json({ success: true })

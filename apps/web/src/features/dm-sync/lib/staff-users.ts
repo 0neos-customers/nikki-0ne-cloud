@@ -8,7 +8,8 @@
  * @module dm-sync/lib/staff-users
  */
 
-import { createServerClient } from '@0ne/db/server'
+import { db, eq, and, asc, desc, isNotNull, ilike } from '@0ne/db/server'
+import { staffUsers as staffUsersTable, dmMessages } from '@0ne/db/server'
 import type { StaffUserRow } from '../types'
 
 // =============================================================================
@@ -46,41 +47,32 @@ export interface ResolvedStaff {
  * Get all staff users for an account
  */
 export async function getStaffUsers(userId: string): Promise<StaffUserRow[]> {
-  const supabase = createServerClient()
+  try {
+    const data = await db.select().from(staffUsersTable)
+      .where(eq(staffUsersTable.clerkUserId, userId))
+      .orderBy(asc(staffUsersTable.displayName))
 
-  const { data, error } = await supabase
-    .from('staff_users')
-    .select('*')
-    .eq('clerk_user_id', userId)
-    .order('display_name', { ascending: true })
-
-  if (error) {
+    return data as unknown as StaffUserRow[]
+  } catch (error) {
     console.error('[Staff Users] Error fetching staff:', error)
-    throw new Error(`Failed to fetch staff users: ${error.message}`)
+    throw new Error(`Failed to fetch staff users: ${String(error)}`)
   }
-
-  return data || []
 }
 
 /**
  * Get active staff users for an account
  */
 export async function getActiveStaffUsers(userId: string): Promise<StaffUserRow[]> {
-  const supabase = createServerClient()
+  try {
+    const data = await db.select().from(staffUsersTable)
+      .where(and(eq(staffUsersTable.clerkUserId, userId), eq(staffUsersTable.isActive, true)))
+      .orderBy(asc(staffUsersTable.displayName))
 
-  const { data, error } = await supabase
-    .from('staff_users')
-    .select('*')
-    .eq('clerk_user_id', userId)
-    .eq('is_active', true)
-    .order('display_name', { ascending: true })
-
-  if (error) {
+    return data as unknown as StaffUserRow[]
+  } catch (error) {
     console.error('[Staff Users] Error fetching active staff:', error)
-    throw new Error(`Failed to fetch active staff users: ${error.message}`)
+    throw new Error(`Failed to fetch active staff users: ${String(error)}`)
   }
-
-  return data || []
 }
 
 /**
@@ -89,20 +81,16 @@ export async function getActiveStaffUsers(userId: string): Promise<StaffUserRow[
 export async function getStaffBySkoolId(
   skoolUserId: string
 ): Promise<StaffUserRow | null> {
-  const supabase = createServerClient()
+  try {
+    const [data] = await db.select().from(staffUsersTable)
+      .where(eq(staffUsersTable.skoolUserId, skoolUserId))
+      .limit(1)
 
-  const { data, error } = await supabase
-    .from('staff_users')
-    .select('*')
-    .eq('skool_user_id', skoolUserId)
-    .single()
-
-  if (error && error.code !== 'PGRST116') {
-    // PGRST116 = no rows returned
+    return (data as unknown as StaffUserRow) || null
+  } catch (error) {
     console.error('[Staff Users] Error fetching staff by Skool ID:', error)
+    return null
   }
-
-  return data || null
 }
 
 /**
@@ -112,97 +100,78 @@ export async function getStaffByGhlUserId(
   userId: string,
   ghlUserId: string
 ): Promise<StaffUserRow | null> {
-  const supabase = createServerClient()
+  try {
+    const [data] = await db.select().from(staffUsersTable)
+      .where(and(
+        eq(staffUsersTable.clerkUserId, userId),
+        eq(staffUsersTable.ghlUserId, ghlUserId),
+        eq(staffUsersTable.isActive, true)
+      ))
+      .limit(1)
 
-  const { data, error } = await supabase
-    .from('staff_users')
-    .select('*')
-    .eq('clerk_user_id', userId)
-    .eq('ghl_user_id', ghlUserId)
-    .eq('is_active', true)
-    .single()
-
-  if (error && error.code !== 'PGRST116') {
+    return (data as unknown as StaffUserRow) || null
+  } catch (error) {
     console.error('[Staff Users] Error fetching staff by GHL ID:', error)
+    return null
   }
-
-  return data || null
 }
 
 /**
  * Get the default staff user for an account
  */
 export async function getDefaultStaff(userId: string): Promise<StaffUserRow | null> {
-  const supabase = createServerClient()
-
   // First try to find explicit default
-  const { data: defaultStaff, error: defaultError } = await supabase
-    .from('staff_users')
-    .select('*')
-    .eq('clerk_user_id', userId)
-    .eq('is_default', true)
-    .eq('is_active', true)
-    .single()
+  const [defaultStaff] = await db.select().from(staffUsersTable)
+    .where(and(
+      eq(staffUsersTable.clerkUserId, userId),
+      eq(staffUsersTable.isDefault, true),
+      eq(staffUsersTable.isActive, true)
+    ))
+    .limit(1)
 
   if (defaultStaff) {
-    return defaultStaff
+    return defaultStaff as unknown as StaffUserRow
   }
 
   // Fall back to first active staff user
-  if (defaultError && defaultError.code === 'PGRST116') {
-    const { data: firstStaff, error: firstError } = await supabase
-      .from('staff_users')
-      .select('*')
-      .eq('clerk_user_id', userId)
-      .eq('is_active', true)
-      .order('created_at', { ascending: true })
-      .limit(1)
-      .single()
+  const [firstStaff] = await db.select().from(staffUsersTable)
+    .where(and(
+      eq(staffUsersTable.clerkUserId, userId),
+      eq(staffUsersTable.isActive, true)
+    ))
+    .orderBy(asc(staffUsersTable.createdAt))
+    .limit(1)
 
-    if (firstError && firstError.code !== 'PGRST116') {
-      console.error('[Staff Users] Error fetching first staff:', firstError)
-    }
-
-    return firstStaff || null
-  }
-
-  return null
+  return (firstStaff as unknown as StaffUserRow) || null
 }
 
 /**
  * Create a new staff user
  */
 export async function createStaffUser(input: StaffUserInput): Promise<StaffUserRow> {
-  const supabase = createServerClient()
-
   // If setting as default, unset other defaults first
   if (input.isDefault) {
-    await supabase
-      .from('staff_users')
-      .update({ is_default: false })
-      .eq('clerk_user_id', input.userId)
+    await db.update(staffUsersTable)
+      .set({ isDefault: false })
+      .where(eq(staffUsersTable.clerkUserId, input.userId))
   }
 
-  const { data, error } = await supabase
-    .from('staff_users')
-    .insert({
-      clerk_user_id: input.userId,
-      skool_user_id: input.skoolUserId,
-      skool_username: input.skoolUsername || null,
-      display_name: input.displayName,
-      ghl_user_id: input.ghlUserId || null,
-      is_default: input.isDefault || false,
-      is_active: input.isActive !== false,
-    })
-    .select()
-    .single()
+  try {
+    const [data] = await db.insert(staffUsersTable).values({
+      clerkUserId: input.userId,
+      skoolUserId: input.skoolUserId,
+      skoolUsername: input.skoolUsername || null,
+      displayName: input.displayName,
+      ghlUserId: input.ghlUserId || null,
+      isDefault: input.isDefault || false,
+      isActive: input.isActive !== false,
+    }).returning()
 
-  if (error) {
+    return data as unknown as StaffUserRow
+  } catch (error) {
     console.error('[Staff Users] Error creating staff user:', error)
-    throw new Error(`Failed to create staff user: ${error.message}`)
+    throw new Error(`Failed to create staff user: ${String(error)}`)
   }
-
-  return data
 }
 
 /**
@@ -212,59 +181,51 @@ export async function updateStaffUser(
   id: string,
   updates: Partial<Omit<StaffUserInput, 'userId' | 'skoolUserId'>>
 ): Promise<StaffUserRow> {
-  const supabase = createServerClient()
-
   // If setting as default, need to get the clerk_user_id first
   if (updates.isDefault) {
-    const { data: existing } = await supabase
-      .from('staff_users')
-      .select('clerk_user_id')
-      .eq('id', id)
-      .single()
+    const [existing] = await db.select({ clerkUserId: staffUsersTable.clerkUserId })
+      .from(staffUsersTable)
+      .where(eq(staffUsersTable.id, id))
+      .limit(1)
 
-    if (existing) {
-      await supabase
-        .from('staff_users')
-        .update({ is_default: false })
-        .eq('clerk_user_id', existing.clerk_user_id)
+    if (existing?.clerkUserId) {
+      await db.update(staffUsersTable)
+        .set({ isDefault: false })
+        .where(eq(staffUsersTable.clerkUserId, existing.clerkUserId))
     }
   }
 
   const updateData: Record<string, unknown> = {}
   if (updates.skoolUsername !== undefined)
-    updateData.skool_username = updates.skoolUsername
+    updateData.skoolUsername = updates.skoolUsername
   if (updates.displayName !== undefined)
-    updateData.display_name = updates.displayName
-  if (updates.ghlUserId !== undefined) updateData.ghl_user_id = updates.ghlUserId
-  if (updates.isDefault !== undefined) updateData.is_default = updates.isDefault
-  if (updates.isActive !== undefined) updateData.is_active = updates.isActive
+    updateData.displayName = updates.displayName
+  if (updates.ghlUserId !== undefined) updateData.ghlUserId = updates.ghlUserId
+  if (updates.isDefault !== undefined) updateData.isDefault = updates.isDefault
+  if (updates.isActive !== undefined) updateData.isActive = updates.isActive
 
-  const { data, error } = await supabase
-    .from('staff_users')
-    .update(updateData)
-    .eq('id', id)
-    .select()
-    .single()
+  try {
+    const [data] = await db.update(staffUsersTable)
+      .set(updateData)
+      .where(eq(staffUsersTable.id, id))
+      .returning()
 
-  if (error) {
+    return data as unknown as StaffUserRow
+  } catch (error) {
     console.error('[Staff Users] Error updating staff user:', error)
-    throw new Error(`Failed to update staff user: ${error.message}`)
+    throw new Error(`Failed to update staff user: ${String(error)}`)
   }
-
-  return data
 }
 
 /**
  * Delete a staff user
  */
 export async function deleteStaffUser(id: string): Promise<void> {
-  const supabase = createServerClient()
-
-  const { error } = await supabase.from('staff_users').delete().eq('id', id)
-
-  if (error) {
+  try {
+    await db.delete(staffUsersTable).where(eq(staffUsersTable.id, id))
+  } catch (error) {
     console.error('[Staff Users] Error deleting staff user:', error)
-    throw new Error(`Failed to delete staff user: ${error.message}`)
+    throw new Error(`Failed to delete staff user: ${String(error)}`)
   }
 }
 
@@ -310,25 +271,23 @@ export async function resolveOutboundStaff(
   staff: ResolvedStaff | null
   processedMessage: string
 }> {
-  const supabase = createServerClient()
-
   // 1. Check for @staffname override
   const override = parseStaffOverride(messageText)
   if (override) {
-    const { data: staffByUsername } = await supabase
-      .from('staff_users')
-      .select('*')
-      .eq('clerk_user_id', userId)
-      .ilike('skool_username', override.username)
-      .eq('is_active', true)
-      .single()
+    const [staffByUsername] = await db.select().from(staffUsersTable)
+      .where(and(
+        eq(staffUsersTable.clerkUserId, userId),
+        ilike(staffUsersTable.skoolUsername, override.username),
+        eq(staffUsersTable.isActive, true)
+      ))
+      .limit(1)
 
     if (staffByUsername) {
       return {
         staff: {
-          skoolUserId: staffByUsername.skool_user_id,
-          displayName: staffByUsername.display_name,
-          ghlUserId: staffByUsername.ghl_user_id,
+          skoolUserId: staffByUsername.skoolUserId,
+          displayName: staffByUsername.displayName,
+          ghlUserId: staffByUsername.ghlUserId,
           matchMethod: 'override',
         },
         processedMessage: override.remainingMessage,
@@ -358,31 +317,33 @@ export async function resolveOutboundStaff(
 
   // 3. Check last conversation with this contact
   if (skoolContactId) {
-    const { data: lastMessage } = await supabase
-      .from('dm_messages')
-      .select('staff_skool_id, staff_display_name')
-      .eq('clerk_user_id', userId)
-      .eq('skool_user_id', skoolContactId)
-      .not('staff_skool_id', 'is', null)
-      .order('created_at', { ascending: false })
+    const [lastMessage] = await db.select({
+      staffSkoolId: dmMessages.staffSkoolId,
+      staffDisplayName: dmMessages.staffDisplayName,
+    }).from(dmMessages)
+      .where(and(
+        eq(dmMessages.clerkUserId, userId),
+        eq(dmMessages.skoolUserId, skoolContactId),
+        isNotNull(dmMessages.staffSkoolId)
+      ))
+      .orderBy(desc(dmMessages.createdAt))
       .limit(1)
-      .single()
 
-    if (lastMessage?.staff_skool_id) {
+    if (lastMessage?.staffSkoolId) {
       // Verify this staff is still active
-      const { data: staffFromHistory } = await supabase
-        .from('staff_users')
-        .select('*')
-        .eq('skool_user_id', lastMessage.staff_skool_id)
-        .eq('is_active', true)
-        .single()
+      const [staffFromHistory] = await db.select().from(staffUsersTable)
+        .where(and(
+          eq(staffUsersTable.skoolUserId, lastMessage.staffSkoolId),
+          eq(staffUsersTable.isActive, true)
+        ))
+        .limit(1)
 
       if (staffFromHistory) {
         return {
           staff: {
-            skoolUserId: staffFromHistory.skool_user_id,
-            displayName: staffFromHistory.display_name,
-            ghlUserId: staffFromHistory.ghl_user_id,
+            skoolUserId: staffFromHistory.skoolUserId,
+            displayName: staffFromHistory.displayName,
+            ghlUserId: staffFromHistory.ghlUserId,
             matchMethod: 'last_conversation',
           },
           processedMessage: messageText,

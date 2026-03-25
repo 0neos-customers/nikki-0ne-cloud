@@ -8,11 +8,11 @@
  * @module dm-sync/lib/sync-engine
  */
 
-import { createServerClient } from '@0ne/db/server'
+import { db, eq, and, asc, isNull } from '@0ne/db/server'
+import { dmMessages, dmSyncConfig, dmHandRaiserCampaigns } from '@0ne/db/server'
 import type {
   DmSyncConfig,
   SkoolConversation,
-  DmMessageRow,
 } from '../types'
 import { findOrCreateGhlContact } from './contact-mapper'
 import {
@@ -112,7 +112,6 @@ function groupBy<T>(array: T[], key: keyof T): Record<string, T[]> {
 export async function syncExtensionMessages(
   userId: string
 ): Promise<ExtensionSyncResult> {
-  const supabase = createServerClient()
   const result: ExtensionSyncResult = {
     synced: 0,
     skipped: 0,
@@ -124,14 +123,11 @@ export async function syncExtensionMessages(
 
   try {
     // 1. Get user's sync config
-    const { data: syncConfig, error: configError } = await supabase
-      .from('dm_sync_config')
-      .select('*')
-      .eq('clerk_user_id', userId)
-      .eq('enabled', true)
-      .single()
+    const [syncConfig] = await db.select().from(dmSyncConfig)
+      .where(and(eq(dmSyncConfig.clerkUserId, userId), eq(dmSyncConfig.enabled, true)))
+      .limit(1)
 
-    if (configError || !syncConfig) {
+    if (!syncConfig) {
       console.log(`[Sync Engine] No enabled sync config for user: ${userId}`)
       return result
     }
@@ -142,7 +138,7 @@ export async function syncExtensionMessages(
     // 3. Create GHL client with persistence
     const ghlClient = await createGhlConversationProviderClientWithPersistence(
       userId,
-      syncConfig.ghl_location_id,
+      syncConfig.ghlLocationId!,
       process.env.GHL_CONVERSATION_PROVIDER_ID?.trim(),
       storedTokens
         ? {
@@ -155,20 +151,16 @@ export async function syncExtensionMessages(
 
     // 4. Query messages with ghl_message_id IS NULL AND status = 'pending'
     // These are extension-captured messages that need to be synced to GHL
-    const { data: pendingMessages, error: queryError } = await supabase
-      .from('dm_messages')
-      .select('*')
-      .eq('clerk_user_id', userId)
-      .eq('status', 'pending')
-      .is('ghl_message_id', null)
-      .order('created_at', { ascending: true })
+    const pendingMessages = await db.select().from(dmMessages)
+      .where(and(
+        eq(dmMessages.clerkUserId, userId),
+        eq(dmMessages.status, 'pending'),
+        isNull(dmMessages.ghlMessageId)
+      ))
+      .orderBy(asc(dmMessages.createdAt))
       .limit(100) // Process up to 100 messages per run
 
-    if (queryError) {
-      throw new Error(`Failed to query pending messages: ${queryError.message}`)
-    }
-
-    if (!pendingMessages || pendingMessages.length === 0) {
+    if (pendingMessages.length === 0) {
       console.log('[Sync Engine] No extension messages to sync')
       return result
     }
@@ -179,15 +171,15 @@ export async function syncExtensionMessages(
 
     // 5. Group by conversation for efficient contact lookup
     const messagesByConversation = groupBy(
-      pendingMessages as DmMessageRow[],
-      'skool_conversation_id'
+      pendingMessages,
+      'skoolConversationId'
     )
 
     // 6. Process each conversation
     for (const [conversationId, messages] of Object.entries(messagesByConversation)) {
-      // Get the first message to extract skool_user_id for contact lookup
+      // Get the first message to extract skoolUserId for contact lookup
       const firstMessage = messages[0]
-      const skoolUserId = firstMessage.skool_user_id
+      const skoolUserId = firstMessage.skoolUserId || ''
 
       try {
         // Find/create GHL contact for this Skool user
@@ -212,7 +204,7 @@ export async function syncExtensionMessages(
         for (const message of messages) {
           try {
             // Skip messages with no content
-            const messageContent = message.message_text || ''
+            const messageContent = message.messageText || ''
             if (!messageContent.trim()) {
               console.log(
                 `[Sync Engine] Skipping empty extension message ${message.id}`
@@ -226,15 +218,15 @@ export async function syncExtensionMessages(
             let staffInfo: { skoolUserId: string; displayName: string } | null = null
 
             // Check if message already has staff attribution
-            if (message.staff_skool_id && message.staff_display_name) {
+            if (message.staffSkoolId && message.staffDisplayName) {
               staffInfo = {
-                skoolUserId: message.staff_skool_id,
-                displayName: message.staff_display_name,
+                skoolUserId: message.staffSkoolId,
+                displayName: message.staffDisplayName,
               }
             } else {
               // Try to look up staff by the sender's Skool ID
               const staffUser = await getStaffBySkoolId(
-                message.direction === 'outbound' ? userId : message.skool_user_id
+                message.direction === 'outbound' ? userId : (message.skoolUserId || '')
               )
               if (staffUser) {
                 staffInfo = {
@@ -253,7 +245,7 @@ export async function syncExtensionMessages(
                 )
               } else {
                 // For inbound, use sender_name if available
-                const senderName = message.sender_name || 'Contact'
+                const senderName = message.senderName || 'Contact'
                 formattedContent = formatInboundMessage(
                   senderName,
                   staffInfo.displayName,
@@ -271,11 +263,11 @@ export async function syncExtensionMessages(
                 `[Sync Engine] Syncing extension outbound: ${message.id} (staff: ${staffInfo?.displayName || 'none'})`
               )
               ghlMessageId = await ghlClient.pushOutboundMessage(
-                syncConfig.ghl_location_id,
+                syncConfig.ghlLocationId!,
                 ghlContactId,
                 skoolUserId,
                 formattedContent,
-                message.skool_message_id
+                message.skoolMessageId!
               )
             } else {
               // Inbound message (from contact to Jimmy) - appears on LEFT side in GHL
@@ -283,34 +275,33 @@ export async function syncExtensionMessages(
                 `[Sync Engine] Syncing extension inbound: ${message.id} (staff: ${staffInfo?.displayName || 'none'})`
               )
               ghlMessageId = await ghlClient.pushInboundMessage(
-                syncConfig.ghl_location_id,
+                syncConfig.ghlLocationId!,
                 ghlContactId,
                 skoolUserId,
                 formattedContent,
-                message.skool_message_id
+                message.skoolMessageId!
               )
             }
 
             // Update row with ghl_message_id, status='synced', synced_at, and staff info
-            const { error: updateError } = await supabase
-              .from('dm_messages')
-              .update({
-                ghl_message_id: ghlMessageId,
-                status: 'synced',
-                synced_at: new Date().toISOString(),
-                // Phase 5: Update staff attribution if we resolved it
-                ...(staffInfo && !message.staff_skool_id
-                  ? {
-                      staff_skool_id: staffInfo.skoolUserId,
-                      staff_display_name: staffInfo.displayName,
-                    }
-                  : {}),
-              })
-              .eq('id', message.id)
-
-            if (updateError) {
+            try {
+              await db.update(dmMessages)
+                .set({
+                  ghlMessageId: ghlMessageId,
+                  status: 'synced',
+                  syncedAt: new Date(),
+                  // Phase 5: Update staff attribution if we resolved it
+                  ...(staffInfo && !message.staffSkoolId
+                    ? {
+                        staffSkoolId: staffInfo.skoolUserId,
+                        staffDisplayName: staffInfo.displayName,
+                      }
+                    : {}),
+                })
+                .where(eq(dmMessages.id, message.id))
+            } catch (updateError) {
               throw new Error(
-                `Failed to update message status: ${updateError.message}`
+                `Failed to update message status: ${String(updateError)}`
               )
             }
 
@@ -336,10 +327,9 @@ export async function syncExtensionMessages(
             })
 
             // Mark message as failed
-            await supabase
-              .from('dm_messages')
-              .update({ status: 'failed' })
-              .eq('id', message.id)
+            await db.update(dmMessages)
+              .set({ status: 'failed' })
+              .where(eq(dmMessages.id, message.id))
           }
         }
       } catch (error) {
@@ -384,21 +374,18 @@ export async function syncExtensionMessages(
 export async function getUsersWithActiveHandRaisers(): Promise<
   Array<{ clerk_user_id: string }>
 > {
-  const supabase = createServerClient()
+  try {
+    const data = await db.select({ clerkUserId: dmHandRaiserCampaigns.clerkUserId })
+      .from(dmHandRaiserCampaigns)
+      .where(eq(dmHandRaiserCampaigns.isActive, true))
 
-  const { data, error } = await supabase
-    .from('dm_hand_raiser_campaigns')
-    .select('clerk_user_id')
-    .eq('is_active', true)
-
-  if (error) {
-    console.error('[Sync Engine] Error fetching hand-raiser users:', error.message)
+    // Deduplicate user IDs
+    const uniqueUserIds = [...new Set(data.map((d) => d.clerkUserId).filter(Boolean))]
+    return uniqueUserIds.map((clerk_user_id) => ({ clerk_user_id: clerk_user_id! }))
+  } catch (error) {
+    console.error('[Sync Engine] Error fetching hand-raiser users:', String(error))
     return []
   }
-
-  // Deduplicate user IDs
-  const uniqueUserIds = [...new Set((data || []).map((d) => d.clerk_user_id))]
-  return uniqueUserIds.map((clerk_user_id) => ({ clerk_user_id }))
 }
 
 /**
@@ -407,19 +394,23 @@ export async function getUsersWithActiveHandRaisers(): Promise<
 export async function getEnabledSyncConfigs(): Promise<
   Array<{ clerk_user_id: string; skool_community_slug: string; ghl_location_id: string }>
 > {
-  const supabase = createServerClient()
+  try {
+    const data = await db.select({
+      clerkUserId: dmSyncConfig.clerkUserId,
+      skoolCommunitySlug: dmSyncConfig.skoolCommunitySlug,
+      ghlLocationId: dmSyncConfig.ghlLocationId,
+    }).from(dmSyncConfig)
+      .where(eq(dmSyncConfig.enabled, true))
 
-  const { data, error } = await supabase
-    .from('dm_sync_config')
-    .select('clerk_user_id, skool_community_slug, ghl_location_id')
-    .eq('enabled', true)
-
-  if (error) {
-    console.error('[Sync Engine] Error fetching sync configs:', error.message)
+    return data.map((d) => ({
+      clerk_user_id: d.clerkUserId || '',
+      skool_community_slug: d.skoolCommunitySlug || '',
+      ghl_location_id: d.ghlLocationId || '',
+    }))
+  } catch (error) {
+    console.error('[Sync Engine] Error fetching sync configs:', String(error))
     return []
   }
-
-  return data || []
 }
 
 // =============================================================================

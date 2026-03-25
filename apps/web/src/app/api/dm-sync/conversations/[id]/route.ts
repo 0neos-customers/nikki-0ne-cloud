@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createServerClient } from '@0ne/db/server'
+import { db, eq, and, asc, lt, isNotNull, inArray } from '@0ne/db/server'
+import { dmMessages, dmContactMappings, skoolMembers, conversationSyncStatus } from '@0ne/db/server'
 
 export const dynamic = 'force-dynamic'
 
@@ -45,7 +46,6 @@ export async function GET(
 ) {
   try {
     const { id: conversationId } = await params
-    const supabase = createServerClient()
     const { searchParams } = new URL(request.url)
 
     const limit = parseInt(searchParams.get('limit') || '100', 10)
@@ -55,29 +55,30 @@ export async function GET(
       return NextResponse.json({ error: 'Conversation ID is required' }, { status: 400 })
     }
 
-    // Build query for messages
-    let messagesQuery = supabase
-      .from('dm_messages')
-      .select('id, skool_user_id, direction, message_text, sender_name, status, created_at')
-      .eq('skool_conversation_id', conversationId)
-      .order('created_at', { ascending: true }) // Oldest first (iMessage style)
+    // Build where conditions
+    const conditions: ReturnType<typeof eq>[] = [
+      eq(dmMessages.skoolConversationId, conversationId),
+    ]
 
-    // Apply pagination if 'before' timestamp provided
     if (before) {
-      messagesQuery = messagesQuery.lt('created_at', before)
+      conditions.push(lt(dmMessages.createdAt, new Date(before)))
     }
 
-    // Add limit + 1 to check if there are more
-    messagesQuery = messagesQuery.limit(limit + 1)
+    // Query messages with limit + 1 to check if there are more
+    const messages = await db.select({
+      id: dmMessages.id,
+      skoolUserId: dmMessages.skoolUserId,
+      direction: dmMessages.direction,
+      messageText: dmMessages.messageText,
+      senderName: dmMessages.senderName,
+      status: dmMessages.status,
+      createdAt: dmMessages.createdAt,
+    }).from(dmMessages)
+      .where(and(...conditions))
+      .orderBy(asc(dmMessages.createdAt))
+      .limit(limit + 1)
 
-    const { data: messages, error: messagesError } = await messagesQuery
-
-    if (messagesError) {
-      console.error('[Conversation Detail API] GET messages error:', messagesError)
-      return NextResponse.json({ error: messagesError.message }, { status: 500 })
-    }
-
-    if (!messages || messages.length === 0) {
+    if (messages.length === 0) {
       return NextResponse.json({ error: 'Conversation not found' }, { status: 404 })
     }
 
@@ -87,69 +88,74 @@ export async function GET(
 
     // Get participant info from the first message's skool_user_id
     // Find the user who is NOT Jimmy (i.e., the inbound message sender)
-    const participantUserId = messages.find((m) => m.direction === 'inbound')?.skool_user_id ||
-      messages[0].skool_user_id
+    const participantUserId = messages.find((m) => m.direction === 'inbound')?.skoolUserId ||
+      messages[0].skoolUserId || ''
 
     // Get contact mapping for participant
-    const { data: mapping } = await supabase
-      .from('dm_contact_mappings')
-      .select('skool_user_id, skool_username, skool_display_name, ghl_contact_id')
-      .eq('skool_user_id', participantUserId)
-      .single()
+    const [mapping] = await db.select({
+      skoolUserId: dmContactMappings.skoolUserId,
+      skoolUsername: dmContactMappings.skoolUsername,
+      skoolDisplayName: dmContactMappings.skoolDisplayName,
+      ghlContactId: dmContactMappings.ghlContactId,
+    }).from(dmContactMappings)
+      .where(eq(dmContactMappings.skoolUserId, participantUserId))
+      .limit(1)
 
     // Also check skool_members table as fallback for names
-    const { data: member } = await supabase
-      .from('skool_members')
-      .select('display_name, skool_username')
-      .eq('skool_user_id', participantUserId)
-      .single()
+    const [member] = await db.select({
+      displayName: skoolMembers.displayName,
+      skoolUsername: skoolMembers.skoolUsername,
+    }).from(skoolMembers)
+      .where(eq(skoolMembers.skoolUserId, participantUserId))
+      .limit(1)
 
     // Get participant name from conversation_sync_status (extension-pushed Skool API data)
-    const { data: syncStatus } = await supabase
-      .from('conversation_sync_status')
-      .select('participant_name')
-      .eq('conversation_id', conversationId)
-      .not('participant_name', 'is', null)
+    const [syncStatus] = await db.select({
+      participantName: conversationSyncStatus.participantName,
+    }).from(conversationSyncStatus)
+      .where(and(
+        eq(conversationSyncStatus.conversationId, conversationId),
+        isNotNull(conversationSyncStatus.participantName)
+      ))
       .limit(1)
-      .single()
-    const syncStatusName = syncStatus?.participant_name || null
+    const syncStatusName = syncStatus?.participantName || null
 
     // Get sender_name from messages as fallback - look for a valid name (not "Unknown")
     const inboundWithName = messages.find(
-      (m) => m.direction === 'inbound' && m.sender_name && m.sender_name !== 'Unknown'
+      (m) => m.direction === 'inbound' && m.senderName && m.senderName !== 'Unknown'
     )
     const anyWithName = messages.find(
-      (m) => m.sender_name && m.sender_name !== 'Unknown'
+      (m) => m.senderName && m.senderName !== 'Unknown'
     )
-    const senderName = inboundWithName?.sender_name || anyWithName?.sender_name || null
+    const senderName = inboundWithName?.senderName || anyWithName?.senderName || null
 
     const participant: ConversationParticipant = {
       skool_user_id: participantUserId,
-      display_name: mapping?.skool_display_name || member?.display_name || syncStatusName || senderName || null,
-      username: mapping?.skool_username || member?.skool_username || null,
-      ghl_contact_id: mapping?.ghl_contact_id || null,
+      display_name: mapping?.skoolDisplayName || member?.displayName || syncStatusName || senderName || null,
+      username: mapping?.skoolUsername || member?.skoolUsername || null,
+      ghl_contact_id: mapping?.ghlContactId || null,
     }
 
     // Format messages for response
     const formattedMessages: ConversationMessage[] = actualMessages.map((msg) => ({
       id: msg.id,
       direction: msg.direction as 'inbound' | 'outbound',
-      message_text: msg.message_text,
-      sender_name: msg.sender_name,
+      message_text: msg.messageText,
+      sender_name: msg.senderName,
       status: msg.status as 'synced' | 'pending' | 'failed',
-      created_at: msg.created_at,
+      created_at: msg.createdAt?.toISOString() || new Date().toISOString(),
     }))
 
     // Get oldest timestamp for pagination (first item when sorted oldest-first)
     const oldestTimestamp = actualMessages.length > 0
-      ? actualMessages[0].created_at
+      ? actualMessages[0].createdAt?.toISOString() || null
       : null
 
     return NextResponse.json({
       conversation: {
         id: conversationId,
         participant,
-        message_count: actualMessages.length, // Note: This is just the loaded count
+        message_count: actualMessages.length,
       },
       messages: formattedMessages,
       pagination: {

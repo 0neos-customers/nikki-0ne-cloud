@@ -11,7 +11,8 @@
  */
 
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@0ne/db/server'
+import { db, eq, desc, gte, and, count } from '@0ne/db/server'
+import { ghlTransactions, syncActivityLog } from '@0ne/db/server'
 import { GHLClient, type GHLTransaction } from '@/features/kpi/lib/ghl-client'
 import { SyncLogger } from '@/lib/sync-log'
 
@@ -41,12 +42,10 @@ export async function GET(request: Request) {
   const fullSync = searchParams.get('full') === 'true'
   const statsOnly = searchParams.get('stats') === 'true'
 
-  const supabase = createServerClient()
-
   try {
     // If stats only, return current data summary
     if (statsOnly) {
-      const stats = await getTransactionStats(supabase)
+      const stats = await getTransactionStats()
       return NextResponse.json({
         message: 'GHL payment sync stats',
         stats,
@@ -95,20 +94,33 @@ export async function GET(request: Request) {
       try {
         const record = mapTransactionToRecord(txn)
 
-        const { error } = await supabase
-          .from('ghl_transactions')
-          .upsert(record, {
-            onConflict: 'ghl_transaction_id',
-            ignoreDuplicates: false,
+        await db
+          .insert(ghlTransactions)
+          .values(record)
+          .onConflictDoUpdate({
+            target: [ghlTransactions.ghlTransactionId],
+            set: {
+              ghlContactId: record.ghlContactId,
+              ghlInvoiceId: record.ghlInvoiceId,
+              ghlSubscriptionId: record.ghlSubscriptionId,
+              contactName: record.contactName,
+              contactEmail: record.contactEmail,
+              amount: record.amount,
+              currency: record.currency,
+              status: record.status,
+              entityType: record.entityType,
+              entitySourceType: record.entitySourceType,
+              entitySourceName: record.entitySourceName,
+              paymentMethod: record.paymentMethod,
+              invoiceNumber: record.invoiceNumber,
+              isLiveMode: record.isLiveMode,
+              transactionDate: record.transactionDate,
+              updatedAt: new Date(),
+              syncedAt: new Date(),
+            },
           })
 
-        if (error) {
-          console.error(`[sync-ghl-payments] Error upserting ${txn._id}:`, error)
-          errors.push(`${txn._id}: ${error.message}`)
-          skipped++
-        } else {
-          synced++
-        }
+        synced++
       } catch (err) {
         console.error(`[sync-ghl-payments] Error processing ${txn._id}:`, err)
         errors.push(`${txn._id}: ${String(err)}`)
@@ -122,7 +134,7 @@ export async function GET(request: Request) {
     await syncLogger.complete(synced, { skipped, errors: errors.length })
 
     // Get updated stats
-    const stats = await getTransactionStats(supabase)
+    const stats = await getTransactionStats()
 
     return NextResponse.json({
       message: 'GHL payment sync completed',
@@ -133,8 +145,6 @@ export async function GET(request: Request) {
     })
   } catch (error) {
     console.error('[sync-ghl-payments] Sync failed:', error)
-    // Note: syncLogger is only defined after statsOnly check, so we check if it exists
-    // In the catch block we don't have access to syncLogger if error happened before it was created
     return NextResponse.json(
       { error: 'Sync failed', details: String(error) },
       { status: 500 }
@@ -147,72 +157,78 @@ export async function GET(request: Request) {
  */
 function mapTransactionToRecord(txn: GHLTransaction) {
   return {
-    ghl_transaction_id: txn._id,
-    ghl_contact_id: txn.contactId || null,
-    ghl_invoice_id: txn.meta?.invoiceId || null,
-    ghl_subscription_id: txn.subscriptionId || null,
-    contact_name: txn.contactName || null,
-    contact_email: txn.contactEmail || null,
-    amount: txn.amount, // GHL stores in dollars (not cents)
+    ghlTransactionId: txn._id,
+    ghlContactId: txn.contactId || null,
+    ghlInvoiceId: txn.meta?.invoiceId || null,
+    ghlSubscriptionId: txn.subscriptionId || null,
+    contactName: txn.contactName || null,
+    contactEmail: txn.contactEmail || null,
+    amount: String(txn.amount), // numeric columns expect string
     currency: txn.currency || 'USD',
     status: txn.status,
-    entity_type: txn.entityType || null,
-    entity_source_type: txn.entitySourceType || null,
-    entity_source_name: txn.entitySourceName || null,
-    payment_method: txn.meta?.paymentMethod || null,
-    invoice_number: txn.meta?.invoiceNumber || null,
-    is_live_mode: txn.liveMode,
-    transaction_date: txn.createdAt,
-    updated_at: new Date().toISOString(),
-    synced_at: new Date().toISOString(),
+    entityType: txn.entityType || null,
+    entitySourceType: txn.entitySourceType || null,
+    entitySourceName: txn.entitySourceName || null,
+    paymentMethod: txn.meta?.paymentMethod || null,
+    invoiceNumber: txn.meta?.invoiceNumber || null,
+    isLiveMode: txn.liveMode,
+    transactionDate: new Date(txn.createdAt),
+    updatedAt: new Date(),
+    syncedAt: new Date(),
   }
 }
 
 /**
  * Get transaction stats from database
  */
-async function getTransactionStats(supabase: ReturnType<typeof createServerClient>) {
+async function getTransactionStats() {
   // Total transactions
-  const { count: totalCount } = await supabase
-    .from('ghl_transactions')
-    .select('*', { count: 'exact', head: true })
+  const [totalResult] = await db
+    .select({ count: count() })
+    .from(ghlTransactions)
 
   // Total revenue (succeeded only)
-  const { data: revenueData } = await supabase
-    .from('ghl_transactions')
-    .select('amount')
-    .eq('status', 'succeeded')
+  const revenueData = await db
+    .select({ amount: ghlTransactions.amount })
+    .from(ghlTransactions)
+    .where(eq(ghlTransactions.status, 'succeeded'))
 
-  const totalRevenue = revenueData?.reduce((sum, r) => sum + Number(r.amount), 0) || 0
+  const totalRevenue = revenueData.reduce((sum, r) => sum + Number(r.amount), 0)
 
   // This month
   const startOfMonth = new Date()
   startOfMonth.setDate(1)
   startOfMonth.setHours(0, 0, 0, 0)
 
-  const { data: thisMonthData } = await supabase
-    .from('ghl_transactions')
-    .select('amount')
-    .eq('status', 'succeeded')
-    .gte('transaction_date', startOfMonth.toISOString())
+  const thisMonthData = await db
+    .select({ amount: ghlTransactions.amount })
+    .from(ghlTransactions)
+    .where(and(
+      eq(ghlTransactions.status, 'succeeded'),
+      gte(ghlTransactions.transactionDate, startOfMonth),
+    ))
 
-  const thisMonthRevenue = thisMonthData?.reduce((sum, r) => sum + Number(r.amount), 0) || 0
+  const thisMonthRevenue = thisMonthData.reduce((sum, r) => sum + Number(r.amount), 0)
 
   // Last sync (from unified sync_activity_log)
-  const { data: lastSync } = await supabase
-    .from('sync_activity_log')
-    .select('completed_at, records_synced')
-    .eq('sync_type', 'ghl_payments')
-    .eq('status', 'completed')
-    .order('completed_at', { ascending: false })
+  const [lastSync] = await db
+    .select({
+      completedAt: syncActivityLog.completedAt,
+      recordsSynced: syncActivityLog.recordsSynced,
+    })
+    .from(syncActivityLog)
+    .where(and(
+      eq(syncActivityLog.syncType, 'ghl_payments'),
+      eq(syncActivityLog.status, 'completed'),
+    ))
+    .orderBy(desc(syncActivityLog.completedAt))
     .limit(1)
-    .single()
 
   return {
-    totalTransactions: totalCount || 0,
+    totalTransactions: totalResult?.count || 0,
     totalRevenue,
     thisMonthRevenue,
-    lastSync: lastSync?.completed_at || null,
-    lastSyncRecords: lastSync?.records_synced || 0,
+    lastSync: lastSync?.completedAt || null,
+    lastSyncRecords: lastSync?.recordsSynced || 0,
   }
 }

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { auth } from '@clerk/nextjs/server'
-import { createServerClient } from '@0ne/db/server'
+import { db, eq, gte, lte, asc, and } from '@0ne/db/server'
+import { skoolAboutPageDaily, skoolMembersDaily } from '@0ne/db/server'
 import { DEFAULT_GROUP } from '@/features/skool/lib/config'
 
 export const dynamic = 'force-dynamic'
@@ -54,44 +55,52 @@ async function getFromDatabase(
   startDate: string,
   endDate: string
 ): Promise<DailyDataPoint[]> {
-  const supabase = createServerClient()
-
   // Get about page visits
-  const { data: aboutData, error: aboutError } = await supabase
-    .from('skool_about_page_daily')
-    .select('date, visitors, conversion_rate')
-    .eq('group_slug', DEFAULT_GROUP.slug)
-    .gte('date', startDate)
-    .lte('date', endDate)
-    .order('date', { ascending: true })
-
-  if (aboutError) {
-    console.error('[About Analytics] DB read error:', aboutError)
-    return []
-  }
+  const aboutData = await db
+    .select({
+      date: skoolAboutPageDaily.date,
+      visitors: skoolAboutPageDaily.visitors,
+      conversionRate: skoolAboutPageDaily.conversionRate,
+    })
+    .from(skoolAboutPageDaily)
+    .where(
+      and(
+        eq(skoolAboutPageDaily.groupSlug, DEFAULT_GROUP.slug),
+        gte(skoolAboutPageDaily.date, startDate),
+        lte(skoolAboutPageDaily.date, endDate),
+      )
+    )
+    .orderBy(asc(skoolAboutPageDaily.date))
 
   // Get new members data to calculate actual conversion rate
-  const { data: membersData } = await supabase
-    .from('skool_members_daily')
-    .select('date, new_members')
-    .eq('group_slug', DEFAULT_GROUP.slug)
-    .gte('date', startDate)
-    .lte('date', endDate)
+  const membersData = await db
+    .select({
+      date: skoolMembersDaily.date,
+      newMembers: skoolMembersDaily.newMembers,
+    })
+    .from(skoolMembersDaily)
+    .where(
+      and(
+        eq(skoolMembersDaily.groupSlug, DEFAULT_GROUP.slug),
+        gte(skoolMembersDaily.date, startDate),
+        lte(skoolMembersDaily.date, endDate),
+      )
+    )
 
   // Create a map of date -> new_members
   const newMembersMap = new Map<string, number>()
-  membersData?.forEach((row) => {
-    newMembersMap.set(row.date, row.new_members || 0)
+  membersData.forEach((row) => {
+    if (row.date) newMembersMap.set(row.date, row.newMembers || 0)
   })
 
-  return (aboutData || []).map((row) => {
+  return aboutData.map((row) => {
     const visitors = row.visitors || 0
-    const newMembers = newMembersMap.get(row.date) || 0
+    const newMembers = newMembersMap.get(row.date!) || 0
     // Calculate conversion rate from visitors to new members
     const conversionRate = visitors > 0 ? (newMembers / visitors) * 100 : 0
 
     return {
-      date: row.date,
+      date: row.date!,
       visitors,
       conversionRate: Math.round(conversionRate * 10) / 10,
     }
@@ -235,15 +244,18 @@ export async function GET(request: Request) {
     const avgDailyVisitors = daily.length > 0 ? totalVisitors / daily.length : 0
 
     // Get total new members for the period to calculate overall conversion rate
-    const supabase = createServerClient()
-    const { data: membersTotal } = await supabase
-      .from('skool_members_daily')
-      .select('new_members')
-      .eq('group_slug', DEFAULT_GROUP.slug)
-      .gte('date', startDate)
-      .lte('date', endDate)
+    const membersTotal = await db
+      .select({ newMembers: skoolMembersDaily.newMembers })
+      .from(skoolMembersDaily)
+      .where(
+        and(
+          eq(skoolMembersDaily.groupSlug, DEFAULT_GROUP.slug),
+          gte(skoolMembersDaily.date, startDate),
+          lte(skoolMembersDaily.date, endDate),
+        )
+      )
 
-    const totalNewMembers = membersTotal?.reduce((sum, row) => sum + (row.new_members || 0), 0) || 0
+    const totalNewMembers = membersTotal.reduce((sum, row) => sum + (row.newMembers || 0), 0)
     // Calculate overall conversion rate: total new members / total visitors
     const avgConversionRate = totalVisitors > 0
       ? (totalNewMembers / totalVisitors) * 100

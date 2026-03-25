@@ -1,16 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createServerClient } from '@0ne/db/server'
-import { sanitizeForPostgrestFilter } from '@/lib/postgrest-utils'
-
-// Type for the Supabase client
-type SupabaseClient = ReturnType<typeof createServerClient>
+import { db, eq, gte, lte, lt, and, or, inArray, isNull, asc, count } from '@0ne/db/server'
+import { skoolMembers, skoolMembersDaily } from '@0ne/db/server'
 
 /**
  * Query skool_members directly when filtering by attribution source.
  * Calculates daily new member counts by grouping on member_since date.
  */
 async function getFilteredBySource(
-  supabase: SupabaseClient,
   startDate: string,
   endDate: string,
   sources: string[],
@@ -19,40 +15,37 @@ async function getFilteredBySource(
   // Handle null sources: if sources includes 'unknown', we need to include NULL attribution_source
   const includesUnknown = sources.includes('unknown') || sources.includes('null')
   const regularSources = sources.filter(s => s !== 'unknown' && s !== 'null')
-  const safeRegularSources = regularSources.map(sanitizeForPostgrestFilter)
+
+  // Build source filter condition
+  const buildSourceFilter = () => {
+    if (includesUnknown && regularSources.length > 0) {
+      return or(inArray(skoolMembers.attributionSource, regularSources), isNull(skoolMembers.attributionSource))
+    } else if (includesUnknown) {
+      return isNull(skoolMembers.attributionSource)
+    } else {
+      return inArray(skoolMembers.attributionSource, regularSources)
+    }
+  }
+
+  const sourceFilter = buildSourceFilter()
 
   // Build query for members with join date in range
-  // We need to get all members who joined in the date range and match the source filter
-  let query = supabase
-    .from('skool_members')
-    .select('member_since, attribution_source')
-    .eq('group_slug', 'fruitful')
-    .gte('member_since', `${startDate}T00:00:00Z`)
-    .lte('member_since', `${endDate}T23:59:59Z`)
-
-  // Apply source filter
-  if (includesUnknown && safeRegularSources.length > 0) {
-    // Need both null AND specific sources - use OR filter
-    query = query.or(`attribution_source.in.(${safeRegularSources.join(',')}),attribution_source.is.null`)
-  } else if (includesUnknown) {
-    // Only unknown/null sources
-    query = query.is('attribution_source', null)
-  } else {
-    // Only regular sources
-    query = query.in('attribution_source', safeRegularSources)
-  }
-
-  const { data: members, error } = await query
-
-  if (error) {
-    console.error('[Members Analytics] Source filter error:', error)
-    return NextResponse.json(
-      { error: 'Failed to fetch filtered members data' },
-      { status: 500 }
+  const members = await db
+    .select({
+      memberSince: skoolMembers.memberSince,
+      attributionSource: skoolMembers.attributionSource,
+    })
+    .from(skoolMembers)
+    .where(
+      and(
+        eq(skoolMembers.groupSlug, 'fruitful'),
+        gte(skoolMembers.memberSince, new Date(`${startDate}T00:00:00Z`)),
+        lte(skoolMembers.memberSince, new Date(`${endDate}T23:59:59Z`)),
+        sourceFilter,
+      )
     )
-  }
 
-  console.log(`[Members Analytics] Found ${members?.length || 0} members matching sources: ${sources.join(', ')}`)
+  console.log(`[Members Analytics] Found ${members.length} members matching sources: ${sources.join(', ')}`)
 
   // Aggregate by date
   const dailyMap = new Map<string, number>()
@@ -66,9 +59,9 @@ async function getFilteredBySource(
   }
 
   // Count new members per day
-  ;(members || []).forEach((member) => {
-    if (member.member_since) {
-      const joinDate = new Date(member.member_since).toISOString().split('T')[0]
+  members.forEach((member) => {
+    if (member.memberSince) {
+      const joinDate = new Date(member.memberSince).toISOString().split('T')[0]
       if (dailyMap.has(joinDate)) {
         dailyMap.set(joinDate, (dailyMap.get(joinDate) || 0) + 1)
       }
@@ -80,21 +73,17 @@ async function getFilteredBySource(
   let runningTotal = 0
 
   // Get count of members who joined BEFORE the start date (for cumulative count)
-  let beforeQuery = supabase
-    .from('skool_members')
-    .select('id', { count: 'exact', head: true })
-    .eq('group_slug', 'fruitful')
-    .lt('member_since', `${startDate}T00:00:00Z`)
+  const [{ value: beforeCount }] = await db
+    .select({ value: count() })
+    .from(skoolMembers)
+    .where(
+      and(
+        eq(skoolMembers.groupSlug, 'fruitful'),
+        lt(skoolMembers.memberSince, new Date(`${startDate}T00:00:00Z`)),
+        sourceFilter,
+      )
+    )
 
-  if (includesUnknown && safeRegularSources.length > 0) {
-    beforeQuery = beforeQuery.or(`attribution_source.in.(${safeRegularSources.join(',')}),attribution_source.is.null`)
-  } else if (includesUnknown) {
-    beforeQuery = beforeQuery.is('attribution_source', null)
-  } else {
-    beforeQuery = beforeQuery.in('attribution_source', safeRegularSources)
-  }
-
-  const { count: beforeCount } = await beforeQuery
   runningTotal = beforeCount || 0
 
   const daily = sortedDates.map((date) => {
@@ -181,8 +170,6 @@ async function getFilteredBySource(
  *   - sources: Comma-separated list of attribution sources to filter by
  */
 export async function GET(request: NextRequest) {
-  const supabase = createServerClient()
-
   try {
     const { searchParams } = new URL(request.url)
     const startDateParam = searchParams.get('startDate')
@@ -217,32 +204,34 @@ export async function GET(request: NextRequest) {
 
     // If sources are specified, query skool_members directly and aggregate by date
     if (sources.length > 0) {
-      return await getFilteredBySource(supabase, startDate, endDate, sources, range)
+      return await getFilteredBySource(startDate, endDate, sources, range)
     }
 
     // No source filter - use pre-aggregated skool_members_daily data
-    const { data: dailyData, error } = await supabase
-      .from('skool_members_daily')
-      .select('date, total_members, active_members, new_members, source')
-      .eq('group_slug', 'fruitful')
-      .gte('date', startDate)
-      .lte('date', endDate)
-      .order('date', { ascending: true })
-
-    if (error) {
-      console.error('[Members Analytics API] Error:', error)
-      return NextResponse.json(
-        { error: 'Failed to fetch members data' },
-        { status: 500 }
+    const dailyData = await db
+      .select({
+        date: skoolMembersDaily.date,
+        totalMembers: skoolMembersDaily.totalMembers,
+        activeMembers: skoolMembersDaily.activeMembers,
+        newMembers: skoolMembersDaily.newMembers,
+        source: skoolMembersDaily.source,
+      })
+      .from(skoolMembersDaily)
+      .where(
+        and(
+          eq(skoolMembersDaily.groupSlug, 'fruitful'),
+          gte(skoolMembersDaily.date, startDate),
+          lte(skoolMembersDaily.date, endDate),
+        )
       )
-    }
+      .orderBy(asc(skoolMembersDaily.date))
 
     // Transform data
-    const daily = (dailyData || []).map((row) => ({
-      date: row.date,
-      totalMembers: row.total_members,
-      activeMembers: row.active_members,
-      newMembers: row.new_members || 0,
+    const daily = dailyData.map((row) => ({
+      date: row.date!,
+      totalMembers: row.totalMembers || 0,
+      activeMembers: row.activeMembers || 0,
+      newMembers: row.newMembers || 0,
       source: row.source,
     }))
 

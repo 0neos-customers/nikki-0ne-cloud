@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { auth } from '@clerk/nextjs/server'
-import { createServerClient } from '@0ne/db/server'
+import { db, eq, gte, lte, lt, ne, and, isNull, asc } from '@0ne/db/server'
+import { expenses, adMetrics, dailyAggregates, expenseCategories } from '@0ne/db/server'
 
 export const dynamic = 'force-dynamic'
 
@@ -97,73 +98,94 @@ export async function GET(request: Request) {
       .toISOString()
       .split('T')[0]
 
-    const supabase = createServerClient()
-
     // Fetch expense_categories for canonical display names
-    const { data: expenseCategories } = await supabase
-      .from('expense_categories')
-      .select('name, color, is_system')
+    const expenseCategoriesData = await db
+      .select({
+        name: expenseCategories.name,
+        color: expenseCategories.color,
+        isSystem: expenseCategories.isSystem,
+      })
+      .from(expenseCategories)
 
     // Build lookup map: lowercase category -> canonical display name & color
     const categoryCanonical = new Map<string, { name: string; color: string; isSystem: boolean }>()
-    expenseCategories?.forEach((cat) => {
+    expenseCategoriesData.forEach((cat) => {
       categoryCanonical.set(cat.name.toLowerCase(), {
         name: cat.name,
         color: cat.color || '#6b7280',
-        isSystem: cat.is_system || false,
+        isSystem: cat.isSystem || false,
       })
     })
 
     // Get expenses for current period (excluding Facebook Ads since we'll use ad_metrics)
-    let expenseQuery = supabase
-      .from('expenses')
-      .select('*')
-      .gte('expense_date', startDate)
-      .lte('expense_date', endDate)
-      .neq('category', 'Facebook Ads') // Exclude - we use ad_metrics instead
-
+    const currentExpenseFilters = [
+      gte(expenses.expenseDate, startDate),
+      lte(expenses.expenseDate, endDate),
+      ne(expenses.category, 'Facebook Ads'),
+    ]
     if (category && category.toLowerCase() !== 'facebook ads') {
-      expenseQuery = expenseQuery.eq('category', category)
+      currentExpenseFilters.push(eq(expenses.category, category))
     }
 
-    const { data: currentExpenses } = await expenseQuery
+    const currentExpenses = await db
+      .select()
+      .from(expenses)
+      .where(and(...currentExpenseFilters))
 
     // Get expenses for previous period (excluding Facebook Ads)
-    let prevExpenseQuery = supabase
-      .from('expenses')
-      .select('*')
-      .gte('expense_date', previousStartDate)
-      .lt('expense_date', startDate)
-      .neq('category', 'Facebook Ads') // Exclude - we use ad_metrics instead
-
+    const prevExpenseFilters = [
+      gte(expenses.expenseDate, previousStartDate),
+      lt(expenses.expenseDate, startDate),
+      ne(expenses.category, 'Facebook Ads'),
+    ]
     if (category && category.toLowerCase() !== 'facebook ads') {
-      prevExpenseQuery = prevExpenseQuery.eq('category', category)
+      prevExpenseFilters.push(eq(expenses.category, category))
     }
 
-    const { data: previousExpenses } = await prevExpenseQuery
+    const previousExpenses = await db
+      .select()
+      .from(expenses)
+      .where(and(...prevExpenseFilters))
 
     // Get ad metrics for current period (source of truth for Facebook Ads)
-    const { data: currentAdMetrics } = await supabase
-      .from('ad_metrics')
-      .select('*')
-      .gte('date', startDate)
-      .lte('date', endDate)
+    const currentAdMetrics = await db
+      .select()
+      .from(adMetrics)
+      .where(
+        and(
+          gte(adMetrics.date, startDate),
+          lte(adMetrics.date, endDate),
+        )
+      )
 
     // Get ad metrics for previous period
-    const { data: previousAdMetrics } = await supabase
-      .from('ad_metrics')
-      .select('*')
-      .gte('date', previousStartDate)
-      .lt('date', startDate)
+    const previousAdMetrics = await db
+      .select()
+      .from(adMetrics)
+      .where(
+        and(
+          gte(adMetrics.date, previousStartDate),
+          lt(adMetrics.date, startDate),
+        )
+      )
 
     // Get daily aggregates for lead counts
-    const { data: currentAggregates } = await supabase
-      .from('daily_aggregates')
-      .select('new_leads, new_vip, new_premium, date')
-      .gte('date', startDate)
-      .lte('date', endDate)
-      .is('campaign_id', null)
-      .is('source', null)
+    const currentAggregates = await db
+      .select({
+        newLeads: dailyAggregates.newLeads,
+        newVip: dailyAggregates.newVip,
+        newPremium: dailyAggregates.newPremium,
+        date: dailyAggregates.date,
+      })
+      .from(dailyAggregates)
+      .where(
+        and(
+          gte(dailyAggregates.date, startDate),
+          lte(dailyAggregates.date, endDate),
+          isNull(dailyAggregates.campaignId),
+          isNull(dailyAggregates.source),
+        )
+      )
 
     // Group expenses by category (case-insensitive)
     // Use canonical display names from expense_categories table
@@ -176,7 +198,7 @@ export async function GET(request: Request) {
       return canonical || { name: catKey.charAt(0).toUpperCase() + catKey.slice(1), color: '#6b7280', isSystem: false }
     }
 
-    currentExpenses?.forEach((exp) => {
+    currentExpenses.forEach((exp) => {
       const rawCat = exp.category || 'Other'
       const catKey = getCategoryKey(rawCat)
       if (!categoryMap.has(catKey)) {
@@ -187,7 +209,7 @@ export async function GET(request: Request) {
       entry.current += Number(exp.amount) || 0
     })
 
-    previousExpenses?.forEach((exp) => {
+    previousExpenses.forEach((exp) => {
       const rawCat = exp.category || 'Other'
       const catKey = getCategoryKey(rawCat)
       if (!categoryMap.has(catKey)) {
@@ -199,8 +221,8 @@ export async function GET(request: Request) {
     })
 
     // Calculate Facebook Ads spend from ad_metrics (source of truth for ad spend)
-    const currentAdSpend = currentAdMetrics?.reduce((sum, m) => sum + (Number(m.spend) || 0), 0) || 0
-    const previousAdSpend = previousAdMetrics?.reduce((sum, m) => sum + (Number(m.spend) || 0), 0) || 0
+    const currentAdSpend = currentAdMetrics.reduce((sum, m) => sum + (Number(m.spend) || 0), 0)
+    const previousAdSpend = previousAdMetrics.reduce((sum, m) => sum + (Number(m.spend) || 0), 0)
 
     // Add Facebook Ads as a category from ad_metrics (not from expenses table)
     if (currentAdSpend > 0 || previousAdSpend > 0) {
@@ -231,13 +253,13 @@ export async function GET(request: Request) {
       clients: number
     }>()
 
-    currentAdMetrics?.forEach((metric) => {
-      const channel = metric.campaign_name || metric.campaign_id || 'Unknown'
+    currentAdMetrics.forEach((metric) => {
+      const channel = metric.campaignName || metric.campaignId || 'Unknown'
       if (!channelMap.has(channel)) {
         channelMap.set(channel, { spend: 0, leads: 0, clients: 0 })
       }
       channelMap.get(channel)!.spend += Number(metric.spend) || 0
-      channelMap.get(channel)!.leads += Number(metric.leads) || 0
+      channelMap.get(channel)!.leads += Number((metric as unknown as Record<string, unknown>).leads) || 0
       // Note: clients would need to come from a join with conversions data
     })
 
@@ -261,7 +283,7 @@ export async function GET(request: Request) {
     }>()
 
     // Add Facebook Ads spend from ad_metrics by month
-    currentAdMetrics?.forEach((metric) => {
+    currentAdMetrics.forEach((metric) => {
       const month = metric.date.substring(0, 7) // YYYY-MM
       if (!monthlyMap.has(month)) {
         monthlyMap.set(month, { ads: 0, tools: 0, content: 0, team: 0, total: 0 })
@@ -273,8 +295,8 @@ export async function GET(request: Request) {
     })
 
     // Add other expenses (excluding Facebook Ads which comes from ad_metrics)
-    currentExpenses?.forEach((exp) => {
-      const month = exp.expense_date.substring(0, 7) // YYYY-MM
+    currentExpenses.forEach((exp) => {
+      const month = (exp.expenseDate || '').substring(0, 7) // YYYY-MM
       if (!monthlyMap.has(month)) {
         monthlyMap.set(month, { ads: 0, tools: 0, content: 0, team: 0, total: 0 })
       }
@@ -301,25 +323,26 @@ export async function GET(request: Request) {
 
     // Calculate totals
     const totalExpenses = categories.reduce((sum, c) => sum + c.amount, 0)
-    const totalLeads = currentAggregates?.reduce((sum, a) => sum + (a.new_leads || 0), 0) || 0
-    const totalClients = currentAggregates?.reduce((sum, a) => sum + (a.new_vip || 0) + (a.new_premium || 0), 0) || 0
+    const totalLeads = currentAggregates.reduce((sum, a) => sum + (a.newLeads || 0), 0)
+    const totalClients = currentAggregates.reduce((sum, a) => sum + (a.newVip || 0) + (a.newPremium || 0), 0)
 
     // Get ALL expenses for the list (including Facebook Ads for display)
-    let allExpensesQuery = supabase
-      .from('expenses')
-      .select('*')
-      .gte('expense_date', startDate)
-      .lte('expense_date', endDate)
-
+    const allExpenseFilters = [
+      gte(expenses.expenseDate, startDate),
+      lte(expenses.expenseDate, endDate),
+    ]
     if (category) {
-      allExpensesQuery = allExpensesQuery.eq('category', category)
+      allExpenseFilters.push(eq(expenses.category, category))
     }
 
-    const { data: allExpensesList } = await allExpensesQuery
+    const allExpensesList = await db
+      .select()
+      .from(expenses)
+      .where(and(...allExpenseFilters))
 
     // Format individual expenses for the All Expenses tab
     // Use canonical display names from expense_categories
-    const expenses = (allExpensesList || []).map((exp) => {
+    const expenseItems = allExpensesList.map((exp) => {
       const catKey = (exp.category || 'other').toLowerCase()
       const canonical = getCanonicalInfo(catKey)
       return {
@@ -328,9 +351,9 @@ export async function GET(request: Request) {
         category: canonical.name, // Use canonical display name
         amount: Number(exp.amount) || 0,
         frequency: exp.frequency || 'one_time',
-        isActive: exp.is_active !== false,
-        isSystem: exp.is_system || false,
-        startDate: exp.expense_date,
+        isActive: exp.isActive !== false,
+        isSystem: exp.isSystem || false,
+        startDate: exp.expenseDate,
       }
     })
 
@@ -346,7 +369,7 @@ export async function GET(request: Request) {
       categories,
       byChannel,
       monthly,
-      expenses, // Individual expense items for All Expenses tab
+      expenses: expenseItems, // Individual expense items for All Expenses tab
       period: {
         startDate,
         endDate,
@@ -389,28 +412,17 @@ export async function POST(request: Request) {
       )
     }
 
-    const supabase = createServerClient()
-
-    const { data, error } = await supabase
-      .from('expenses')
-      .insert({
+    const [data] = await db
+      .insert(expenses)
+      .values({
         name: description, // Map description to name column
-        amount: Number(amount),
+        amount: String(Number(amount)),
         category,
-        expense_date,
+        expenseDate: expense_date,
         frequency: frequency || 'one_time',
-        is_active: true,
+        isActive: true,
       })
-      .select()
-      .single()
-
-    if (error) {
-      console.error('Insert expense error:', error)
-      return NextResponse.json(
-        { error: 'Failed to add expense', details: error.message },
-        { status: 500 }
-      )
-    }
+      .returning()
 
     return NextResponse.json({ success: true, expense: data })
   } catch (error) {
@@ -448,23 +460,21 @@ export async function PUT(request: Request) {
       )
     }
 
-    const supabase = createServerClient()
-
     // Check if expense exists and is not a system expense
-    const { data: existing, error: fetchError } = await supabase
-      .from('expenses')
-      .select('id, is_system')
-      .eq('id', id)
-      .single()
+    const [existing] = await db
+      .select({ id: expenses.id, isSystem: expenses.isSystem })
+      .from(expenses)
+      .where(eq(expenses.id, id))
+      .limit(1)
 
-    if (fetchError || !existing) {
+    if (!existing) {
       return NextResponse.json(
         { error: 'Expense not found' },
         { status: 404 }
       )
     }
 
-    if (existing.is_system) {
+    if (existing.isSystem) {
       return NextResponse.json(
         { error: 'System expenses cannot be modified' },
         { status: 403 }
@@ -474,7 +484,7 @@ export async function PUT(request: Request) {
     // Build update object with only provided fields
     const updateData: Record<string, unknown> = {
       name: description, // Map description to name column
-      amount: Number(amount),
+      amount: String(Number(amount)),
       category,
     }
 
@@ -482,30 +492,15 @@ export async function PUT(request: Request) {
       updateData.frequency = frequency
     }
     if (expense_date) {
-      updateData.expense_date = expense_date
-    }
-    if (vendor !== undefined) {
-      updateData.vendor = vendor || null
-    }
-    if (notes !== undefined) {
-      updateData.notes = notes || null
+      updateData.expenseDate = expense_date
     }
 
     // Update the expense
-    const { data, error } = await supabase
-      .from('expenses')
-      .update(updateData)
-      .eq('id', id)
-      .select()
-      .single()
-
-    if (error) {
-      console.error('Update expense error:', error)
-      return NextResponse.json(
-        { error: 'Failed to update expense', details: error.message },
-        { status: 500 }
-      )
-    }
+    const [data] = await db
+      .update(expenses)
+      .set(updateData)
+      .where(eq(expenses.id, id))
+      .returning()
 
     return NextResponse.json({ success: true, expense: data })
   } catch (error) {
@@ -543,23 +538,21 @@ export async function PATCH(request: Request) {
       )
     }
 
-    const supabase = createServerClient()
-
     // Check if expense exists and is not a system expense
-    const { data: existing, error: fetchError } = await supabase
-      .from('expenses')
-      .select('id, is_system')
-      .eq('id', id)
-      .single()
+    const [existing] = await db
+      .select({ id: expenses.id, isSystem: expenses.isSystem })
+      .from(expenses)
+      .where(eq(expenses.id, id))
+      .limit(1)
 
-    if (fetchError || !existing) {
+    if (!existing) {
       return NextResponse.json(
         { error: 'Expense not found' },
         { status: 404 }
       )
     }
 
-    if (existing.is_system) {
+    if (existing.isSystem) {
       return NextResponse.json(
         { error: 'System expenses cannot be modified' },
         { status: 403 }
@@ -567,20 +560,11 @@ export async function PATCH(request: Request) {
     }
 
     // Update the expense
-    const { data, error } = await supabase
-      .from('expenses')
-      .update({ is_active })
-      .eq('id', id)
-      .select()
-      .single()
-
-    if (error) {
-      console.error('Update expense error:', error)
-      return NextResponse.json(
-        { error: 'Failed to update expense', details: error.message },
-        { status: 500 }
-      )
-    }
+    const [data] = await db
+      .update(expenses)
+      .set({ isActive: is_active })
+      .where(eq(expenses.id, id))
+      .returning()
 
     return NextResponse.json({ success: true, expense: data })
   } catch (error) {
@@ -610,23 +594,21 @@ export async function DELETE(request: Request) {
       )
     }
 
-    const supabase = createServerClient()
-
     // Check if expense exists and is not a system expense
-    const { data: existing, error: fetchError } = await supabase
-      .from('expenses')
-      .select('id, is_system')
-      .eq('id', id)
-      .single()
+    const [existing] = await db
+      .select({ id: expenses.id, isSystem: expenses.isSystem })
+      .from(expenses)
+      .where(eq(expenses.id, id))
+      .limit(1)
 
-    if (fetchError || !existing) {
+    if (!existing) {
       return NextResponse.json(
         { error: 'Expense not found' },
         { status: 404 }
       )
     }
 
-    if (existing.is_system) {
+    if (existing.isSystem) {
       return NextResponse.json(
         { error: 'System expenses cannot be deleted' },
         { status: 403 }
@@ -634,18 +616,9 @@ export async function DELETE(request: Request) {
     }
 
     // Delete the expense
-    const { error } = await supabase
-      .from('expenses')
-      .delete()
-      .eq('id', id)
-
-    if (error) {
-      console.error('Delete expense error:', error)
-      return NextResponse.json(
-        { error: 'Failed to delete expense', details: error.message },
-        { status: 500 }
-      )
-    }
+    await db
+      .delete(expenses)
+      .where(eq(expenses.id, id))
 
     return NextResponse.json({ success: true })
   } catch (error) {

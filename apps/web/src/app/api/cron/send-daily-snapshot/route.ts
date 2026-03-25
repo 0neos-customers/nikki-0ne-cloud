@@ -9,7 +9,8 @@
  */
 
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@0ne/db/server'
+import { db } from '@0ne/db/server'
+import { syncActivityLog } from '@0ne/db/server'
 import { sendScheduledSnapshots } from '@/features/notifications/lib/send-notification'
 
 export const runtime = 'edge'
@@ -37,25 +38,25 @@ export async function GET(request: Request) {
     const successCount = results.filter((r) => r.success).length
     const failedCount = totalUsers - successCount
 
-    // Log to sync_activity_log if table exists
+    // Log to sync_activity_log
     try {
-      const supabase = createServerClient()
-      await supabase.from('sync_activity_log').insert({
-        sync_type: 'daily_snapshot',
+      await db.insert(syncActivityLog).values({
+        syncType: 'daily_snapshot',
         status: failedCount === 0 ? 'success' : 'partial',
-        records_processed: totalUsers,
-        records_synced: successCount,
-        error_count: failedCount,
+        recordsSynced: successCount,
+        errorMessage: failedCount > 0 ? `${failedCount} failed` : null,
         metadata: {
           hour: currentHour,
+          recordsProcessed: totalUsers,
+          errorCount: failedCount,
           results: results.map((r) => ({
             userId: r.userId,
             success: r.success,
             error: r.error,
           })),
         },
-        started_at: new Date(startTime).toISOString(),
-        completed_at: new Date().toISOString(),
+        startedAt: new Date(startTime),
+        completedAt: new Date(),
       })
     } catch (logError) {
       // Log table might not exist, that's okay
@@ -84,17 +85,18 @@ export async function GET(request: Request) {
 
     // Log error to sync_activity_log
     try {
-      const supabase = createServerClient()
-      await supabase.from('sync_activity_log').insert({
-        sync_type: 'daily_snapshot',
+      await db.insert(syncActivityLog).values({
+        syncType: 'daily_snapshot',
         status: 'error',
-        records_processed: 0,
-        records_synced: 0,
-        error_count: 1,
-        error_message: error instanceof Error ? error.message : 'Unknown error',
-        metadata: { hour: currentHour },
-        started_at: new Date(startTime).toISOString(),
-        completed_at: new Date().toISOString(),
+        recordsSynced: 0,
+        errorMessage: error instanceof Error ? error.message : 'Unknown error',
+        metadata: {
+          hour: currentHour,
+          recordsProcessed: 0,
+          errorCount: 1,
+        },
+        startedAt: new Date(startTime),
+        completedAt: new Date(),
       })
     } catch {
       // Ignore logging errors

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createServerClient } from '@0ne/db/server'
+import { db, gte, lte, asc, and } from '@0ne/db/server'
+import { skoolMetrics } from '@0ne/db/server'
 
 /**
  * GET /api/kpi/discovery-rank
@@ -13,8 +14,6 @@ import { createServerClient } from '@0ne/db/server'
  *   If not provided, defaults to last 30 days.
  */
 export async function GET(request: NextRequest) {
-  const supabase = createServerClient()
-
   try {
     const { searchParams } = new URL(request.url)
     const startDateParam = searchParams.get('startDate')
@@ -35,27 +34,27 @@ export async function GET(request: NextRequest) {
       endDate = now.toISOString().split('T')[0]
     }
 
-    const { data: metrics, error } = await supabase
-      .from('skool_metrics')
-      .select('snapshot_date, category_rank, category')
-      .gte('snapshot_date', startDate)
-      .lte('snapshot_date', endDate)
-      .order('snapshot_date', { ascending: true })
-
-    if (error) {
-      console.error('[Discovery Rank API] Error:', error)
-      return NextResponse.json(
-        { error: 'Failed to fetch discovery rank data' },
-        { status: 500 }
+    const metrics = await db
+      .select({
+        snapshotDate: skoolMetrics.snapshotDate,
+        categoryRank: skoolMetrics.categoryRank,
+        category: skoolMetrics.category,
+      })
+      .from(skoolMetrics)
+      .where(
+        and(
+          gte(skoolMetrics.snapshotDate, startDate),
+          lte(skoolMetrics.snapshotDate, endDate),
+        )
       )
-    }
+      .orderBy(asc(skoolMetrics.snapshotDate))
 
     // Transform to expected format
-    const history = (metrics || [])
-      .filter((m) => m.category_rank !== null)
+    const history = metrics
+      .filter((m) => m.categoryRank !== null)
       .map((m) => ({
-        date: m.snapshot_date,
-        rank: m.category_rank,
+        date: m.snapshotDate,
+        rank: m.categoryRank,
         category: m.category || undefined,
       }))
 

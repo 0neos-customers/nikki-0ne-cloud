@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createServerClient } from '@0ne/db/server'
+import { db, eq } from '@0ne/db/server'
+import { dmContactMappings, skoolMembers } from '@0ne/db/server'
 import { parseDisplayName } from '@/features/dm-sync/lib/contact-mapper'
 
 export const dynamic = 'force-dynamic'
@@ -15,25 +16,22 @@ export async function POST(
 ) {
   try {
     const { skoolUserId } = await params
-    const supabase = createServerClient()
 
     // 1. Fetch the existing mapping for name/username
-    const { data: mapping, error: mappingError } = await supabase
-      .from('dm_contact_mappings')
-      .select('*')
-      .eq('skool_user_id', skoolUserId)
-      .single()
+    const [mapping] = await db.select().from(dmContactMappings)
+      .where(eq(dmContactMappings.skoolUserId, skoolUserId))
+      .limit(1)
 
-    if (mappingError || !mapping) {
+    if (!mapping) {
       return NextResponse.json(
         { error: 'Contact mapping not found' },
         { status: 404 }
       )
     }
 
-    if (mapping.ghl_contact_id) {
+    if (mapping.ghlContactId) {
       return NextResponse.json(
-        { error: 'Contact already has a GHL contact ID', ghlContactId: mapping.ghl_contact_id },
+        { error: 'Contact already has a GHL contact ID', ghlContactId: mapping.ghlContactId },
         { status: 409 }
       )
     }
@@ -42,7 +40,7 @@ export async function POST(
     const syntheticEmail = `${skoolUserId}@skool-sync.0ne.ai`
 
     // 3. Parse display name
-    const displayName = mapping.skool_display_name || mapping.skool_username || 'Unknown'
+    const displayName = mapping.skoolDisplayName || mapping.skoolUsername || 'Unknown'
     const nameParts = parseDisplayName(displayName)
 
     // 4. Create GHL contact via API
@@ -95,25 +93,23 @@ export async function POST(
     }
 
     // 5. Update dm_contact_mappings
-    await supabase
-      .from('dm_contact_mappings')
-      .update({
-        ghl_contact_id: ghlContactId,
-        match_method: 'synthetic',
+    await db.update(dmContactMappings)
+      .set({
+        ghlContactId: ghlContactId,
+        matchMethod: 'synthetic',
         email: syntheticEmail,
-        updated_at: new Date().toISOString(),
+        updatedAt: new Date(),
       })
-      .eq('skool_user_id', skoolUserId)
+      .where(eq(dmContactMappings.skoolUserId, skoolUserId))
 
     // 6. Update skool_members if applicable
-    await supabase
-      .from('skool_members')
-      .update({
-        ghl_contact_id: ghlContactId,
-        matched_at: new Date().toISOString(),
-        match_method: 'synthetic',
+    await db.update(skoolMembers)
+      .set({
+        ghlContactId: ghlContactId,
+        matchedAt: new Date(),
+        matchMethod: 'synthetic',
       })
-      .eq('skool_user_id', skoolUserId)
+      .where(eq(skoolMembers.skoolUserId, skoolUserId))
 
     console.log(`[Contacts API] Created synthetic GHL contact ${ghlContactId} for ${skoolUserId}`)
 

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createServerClient } from '@0ne/db/server'
+import { db, eq } from '@0ne/db/server'
+import { dmContactMappings, skoolMembers } from '@0ne/db/server'
 
 export const dynamic = 'force-dynamic'
 
@@ -24,11 +25,10 @@ export async function PATCH(
     const { skoolUserId } = await params
     const body: ContactUpdate = await request.json()
 
-    const supabase = createServerClient()
-    const now = new Date().toISOString()
+    const now = new Date()
 
     // Build mapping update (dm_contact_mappings)
-    const mappingUpdate: Record<string, unknown> = { updated_at: now }
+    const mappingUpdate: Record<string, unknown> = { updatedAt: now }
     // Build member update (skool_members)
     const memberUpdate: Record<string, unknown> = {}
 
@@ -37,11 +37,11 @@ export async function PATCH(
       if (!ghlId) {
         return NextResponse.json({ error: 'ghl_contact_id cannot be empty' }, { status: 400 })
       }
-      mappingUpdate.ghl_contact_id = ghlId
-      mappingUpdate.match_method = 'manual'
-      memberUpdate.ghl_contact_id = ghlId
-      memberUpdate.matched_at = now
-      memberUpdate.match_method = 'manual'
+      mappingUpdate.ghlContactId = ghlId
+      mappingUpdate.matchMethod = 'manual'
+      memberUpdate.ghlContactId = ghlId
+      memberUpdate.matchedAt = now
+      memberUpdate.matchMethod = 'manual'
     }
 
     if (body.email !== undefined) {
@@ -55,13 +55,13 @@ export async function PATCH(
     }
 
     if (body.display_name !== undefined) {
-      mappingUpdate.skool_display_name = body.display_name.trim() || null
-      memberUpdate.display_name = body.display_name.trim() || null
+      mappingUpdate.skoolDisplayName = body.display_name.trim() || null
+      memberUpdate.displayName = body.display_name.trim() || null
     }
 
     if (body.username !== undefined) {
-      mappingUpdate.skool_username = body.username.trim() || null
-      memberUpdate.skool_username = body.username.trim() || null
+      mappingUpdate.skoolUsername = body.username.trim() || null
+      memberUpdate.skoolUsername = body.username.trim() || null
     }
 
     // Only proceed if there's something to update
@@ -70,22 +70,20 @@ export async function PATCH(
     }
 
     // Update dm_contact_mappings
-    const { error: mappingError } = await supabase
-      .from('dm_contact_mappings')
-      .update(mappingUpdate)
-      .eq('skool_user_id', skoolUserId)
-
-    if (mappingError) {
-      console.error('[Contacts API] PATCH mapping error:', mappingError)
-      return NextResponse.json({ error: mappingError.message }, { status: 500 })
+    try {
+      await db.update(dmContactMappings)
+        .set(mappingUpdate)
+        .where(eq(dmContactMappings.skoolUserId, skoolUserId))
+    } catch (err) {
+      console.error('[Contacts API] PATCH mapping error:', err)
+      return NextResponse.json({ error: String(err) }, { status: 500 })
     }
 
     // Also update skool_members if there are member fields
     if (Object.keys(memberUpdate).length > 0) {
-      await supabase
-        .from('skool_members')
-        .update(memberUpdate)
-        .eq('skool_user_id', skoolUserId)
+      await db.update(skoolMembers)
+        .set(memberUpdate)
+        .where(eq(skoolMembers.skoolUserId, skoolUserId))
     }
 
     return NextResponse.json({ success: true })

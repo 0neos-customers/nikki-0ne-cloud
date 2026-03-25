@@ -1,5 +1,11 @@
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@0ne/db/server'
+import { db, eq, gte, lte, and, isNull } from '@0ne/db/server'
+import {
+  contacts, events, adMetrics, revenue, expenses,
+  dailyAggregates, dailyExpensesByCategory,
+  dimensionSources, dimensionStages, weeklyTrends,
+} from '@0ne/db/server'
+import { rawSql } from '@0ne/db/server'
 import { SyncLogger } from '@/lib/sync-log'
 
 export const runtime = 'edge'
@@ -27,20 +33,20 @@ interface EventRow {
 }
 
 interface AdMetricRow {
-  spend: number
+  spend: string | number | null
   campaign_id: string | null
 }
 
 interface RevenueRow {
-  amount: number
+  amount: string | number
   type: string | null
   campaign_id: string | null
 }
 
 interface ExpenseRow {
-  category: string
-  amount: number
-  is_active: boolean
+  category: string | null
+  amount: string | number
+  is_active: boolean | null
 }
 
 /**
@@ -114,8 +120,6 @@ export async function GET(request: Request) {
   await syncLogger.start({ source: 'cron' })
 
   try {
-    const supabase = createServerClient()
-
     // Support ?date=YYYY-MM-DD for backfilling, otherwise use yesterday
     const url = new URL(request.url)
     const dateParam = url.searchParams.get('date')
@@ -128,98 +132,152 @@ export async function GET(request: Request) {
       yesterday.setDate(yesterday.getDate() - 1)
       dateStr = yesterday.toISOString().split('T')[0]
     }
-    const startOfDay = `${dateStr}T00:00:00.000Z`
-    const endOfDay = `${dateStr}T23:59:59.999Z`
+    const startOfDay = new Date(`${dateStr}T00:00:00.000Z`)
+    const endOfDay = new Date(`${dateStr}T23:59:59.999Z`)
 
     // Fetch all raw data for the day
-    const [eventsResult, contactsResult, adMetricsResult, revenueResult, expensesResult] = await Promise.all([
-      supabase
-        .from('events')
-        .select('event_type, event_data, source, campaign')
-        .gte('created_at', startOfDay)
-        .lte('created_at', endOfDay),
-      supabase
-        .from('contacts')
-        .select('current_stage, source, campaign')
-        .gte('created_at', startOfDay)
-        .lte('created_at', endOfDay),
-      supabase
-        .from('ad_metrics')
-        .select('spend, campaign_id')
-        .eq('date', dateStr),
-      supabase
-        .from('revenue')
-        .select('amount, type, campaign_id')
-        .eq('transaction_date', dateStr),
-      supabase
-        .from('expenses')
-        .select('category, amount, is_active')
-        .or(`expense_date.eq.${dateStr},and(frequency.eq.monthly,start_date.lte.${dateStr},or(end_date.is.null,end_date.gte.${dateStr}))`)
+    const [eventsData, contactsData, adMetricsData, revenueData, expensesData] = await Promise.all([
+      db
+        .select({
+          event_type: events.eventType,
+          event_data: events.eventData,
+          source: events.source,
+          campaign: events.campaign,
+        })
+        .from(events)
+        .where(and(gte(events.createdAt, startOfDay), lte(events.createdAt, endOfDay))),
+      db
+        .select({
+          current_stage: contacts.currentStage,
+          source: contacts.source,
+          campaign: contacts.campaign,
+        })
+        .from(contacts)
+        .where(and(gte(contacts.createdAt, startOfDay), lte(contacts.createdAt, endOfDay))),
+      db
+        .select({
+          spend: adMetrics.spend,
+          campaign_id: adMetrics.campaignId,
+        })
+        .from(adMetrics)
+        .where(eq(adMetrics.date, dateStr)),
+      db
+        .select({
+          amount: revenue.amount,
+          type: revenue.type,
+          campaign_id: revenue.campaignId,
+        })
+        .from(revenue)
+        .where(eq(revenue.transactionDate, dateStr)),
+      db
+        .select({
+          category: expenses.category,
+          amount: expenses.amount,
+          is_active: expenses.isActive,
+        })
+        .from(expenses)
+        .where(
+          rawSql`(${expenses.expenseDate} = ${dateStr} OR (${expenses.frequency} = 'monthly' AND ${expenses.startDate} <= ${dateStr} AND (${expenses.endDate} IS NULL OR ${expenses.endDate} >= ${dateStr})))`
+        ),
     ])
 
-    const events = (eventsResult.data || []) as EventRow[]
-    const contacts = (contactsResult.data || []) as ContactRow[]
-    const adMetrics = (adMetricsResult.data || []) as AdMetricRow[]
-    const revenue = (revenueResult.data || []) as RevenueRow[]
-    const expenses = (expensesResult.data || []) as ExpenseRow[]
+    const eventsRows = eventsData as EventRow[]
+    const contactsRows = contactsData as ContactRow[]
+    const adMetricsRows = adMetricsData as AdMetricRow[]
+    const revenueRows = revenueData as RevenueRow[]
+    const expensesRows = expensesData as ExpenseRow[]
 
     // Collect unique sources and campaigns
-    const sources = [...new Set(contacts.map(c => c.source).filter(Boolean))] as string[]
+    const sources = [...new Set(contactsRows.map(c => c.source).filter(Boolean))] as string[]
     const campaignIds = [...new Set([
-      ...contacts.map(c => c.campaign).filter(Boolean),
-      ...adMetrics.map(m => m.campaign_id).filter(Boolean),
+      ...contactsRows.map(c => c.campaign).filter(Boolean),
+      ...adMetricsRows.map(m => m.campaign_id).filter(Boolean),
     ])] as string[]
 
     const aggregatesToUpsert: ReturnType<typeof buildAggregate>[] = []
 
     // 1. Overall aggregate (null campaign, null source)
-    aggregatesToUpsert.push(buildAggregate(dateStr, null, null, contacts, events, revenue, adMetrics))
+    aggregatesToUpsert.push(buildAggregate(dateStr, null, null, contactsRows, eventsRows, revenueRows, adMetricsRows))
 
     // 2. Source-level aggregates (null campaign, specific source)
     for (const source of sources) {
-      aggregatesToUpsert.push(buildAggregate(dateStr, null, source, contacts, events, revenue, adMetrics))
+      aggregatesToUpsert.push(buildAggregate(dateStr, null, source, contactsRows, eventsRows, revenueRows, adMetricsRows))
     }
 
     // 3. Campaign-level aggregates (specific campaign, null source)
     for (const campaignId of campaignIds) {
-      aggregatesToUpsert.push(buildAggregate(dateStr, campaignId, null, contacts, events, revenue, adMetrics))
+      aggregatesToUpsert.push(buildAggregate(dateStr, campaignId, null, contactsRows, eventsRows, revenueRows, adMetricsRows))
     }
 
     // 4. Campaign + Source aggregates (specific campaign, specific source)
     for (const campaignId of campaignIds) {
       const campaignSources = [...new Set(
-        contacts.filter(c => c.campaign === campaignId).map(c => c.source).filter(Boolean)
+        contactsRows.filter(c => c.campaign === campaignId).map(c => c.source).filter(Boolean)
       )] as string[]
 
       for (const source of campaignSources) {
-        aggregatesToUpsert.push(buildAggregate(dateStr, campaignId, source, contacts, events, revenue, adMetrics))
+        aggregatesToUpsert.push(buildAggregate(dateStr, campaignId, source, contactsRows, eventsRows, revenueRows, adMetricsRows))
       }
     }
 
     // Batch upsert all aggregates
-    const { error: upsertError } = await supabase
-      .from('daily_aggregates')
-      .upsert(aggregatesToUpsert, {
-        onConflict: 'date,campaign_id,source',
-      })
+    for (const agg of aggregatesToUpsert) {
+      const record = {
+        date: agg.date,
+        campaignId: agg.campaign_id,
+        source: agg.source,
+        newLeads: agg.new_members,
+        newHandRaisers: agg.new_hand_raisers,
+        newQualified: agg.new_qualified_premium + agg.new_qualified_vip,
+        newVip: agg.new_vip,
+        newPremium: agg.new_premium,
+        newFunded: 0,
+        totalRevenue: String(agg.total_revenue),
+        vipRevenue: String(agg.vip_revenue),
+        premiumRevenue: String(agg.premium_revenue),
+        successFeeRevenue: String(agg.success_fee_revenue),
+        adSpend: String(agg.ad_spend),
+        expenses: '0',
+        totalFundedAmount: String(agg.total_funded_amount),
+        fundedCount: agg.funded_count,
+      }
 
-    if (upsertError) {
-      throw upsertError
+      await db
+        .insert(dailyAggregates)
+        .values(record)
+        .onConflictDoUpdate({
+          target: [dailyAggregates.date, dailyAggregates.campaignId, dailyAggregates.source],
+          set: {
+            newLeads: record.newLeads,
+            newHandRaisers: record.newHandRaisers,
+            newQualified: record.newQualified,
+            newVip: record.newVip,
+            newPremium: record.newPremium,
+            totalRevenue: record.totalRevenue,
+            vipRevenue: record.vipRevenue,
+            premiumRevenue: record.premiumRevenue,
+            successFeeRevenue: record.successFeeRevenue,
+            adSpend: record.adSpend,
+            totalFundedAmount: record.totalFundedAmount,
+            fundedCount: record.fundedCount,
+          },
+        })
     }
 
     // =============================================================================
     // EXPENSES BY CATEGORY
     // =============================================================================
     const expensesByCategory = new Map<string, { amount: number; count: number; isSystem: boolean }>()
-    for (const expense of expenses) {
-      const existing = expensesByCategory.get(expense.category) || { amount: 0, count: 0, isSystem: false }
+    for (const expense of expensesRows) {
+      const cat = expense.category || 'Uncategorized'
+      const existing = expensesByCategory.get(cat) || { amount: 0, count: 0, isSystem: false }
       existing.amount += Number(expense.amount)
       existing.count += 1
-      expensesByCategory.set(expense.category, existing)
+      expensesByCategory.set(cat, existing)
     }
 
     // Add Facebook Ads as a system expense category
-    const totalAdSpend = adMetrics.reduce((sum, m) => sum + Number(m.spend), 0)
+    const totalAdSpend = adMetricsRows.reduce((sum, m) => sum + Number(m.spend), 0)
     if (totalAdSpend > 0) {
       expensesByCategory.set('Facebook Ads', {
         amount: totalAdSpend,
@@ -232,15 +290,23 @@ export async function GET(request: Request) {
     const expenseCategoryRows = Array.from(expensesByCategory.entries()).map(([category, data]) => ({
       date: dateStr,
       category,
-      amount: data.amount,
-      expense_count: data.count,
-      is_system: data.isSystem,
+      amount: String(data.amount),
+      expenseCount: data.count,
+      isSystem: data.isSystem,
     }))
 
-    if (expenseCategoryRows.length > 0) {
-      await supabase
-        .from('daily_expenses_by_category')
-        .upsert(expenseCategoryRows, { onConflict: 'date,category' })
+    for (const row of expenseCategoryRows) {
+      await db
+        .insert(dailyExpensesByCategory)
+        .values(row)
+        .onConflictDoUpdate({
+          target: [dailyExpensesByCategory.date, dailyExpensesByCategory.category],
+          set: {
+            amount: row.amount,
+            expenseCount: row.expenseCount,
+            isSystem: row.isSystem,
+          },
+        })
     }
 
     // =============================================================================
@@ -249,30 +315,39 @@ export async function GET(request: Request) {
 
     // Update source dimensions
     for (const source of sources) {
-      const count = contacts.filter(c => c.source === source).length
-      await supabase
-        .from('dimension_sources')
-        .upsert({
+      const cnt = contactsRows.filter(c => c.source === source).length
+      await db
+        .insert(dimensionSources)
+        .values({
           source,
-          display_name: formatSourceName(source),
-          contact_count: count,
-          last_seen_date: dateStr,
-          is_active: true,
-        }, { onConflict: 'source' })
+          displayName: formatSourceName(source),
+          contactCount: cnt,
+          lastSeenDate: dateStr,
+          isActive: true,
+        })
+        .onConflictDoUpdate({
+          target: [dimensionSources.source],
+          set: {
+            displayName: formatSourceName(source),
+            contactCount: cnt,
+            lastSeenDate: dateStr,
+            isActive: true,
+          },
+        })
     }
 
     // Update stage dimensions with current counts
     const stageCounts = new Map<string, number>()
     for (const stage of FUNNEL_STAGES) {
-      stageCounts.set(stage, contacts.filter(c => c.current_stage === stage).length)
+      stageCounts.set(stage, contactsRows.filter(c => c.current_stage === stage).length)
     }
 
-    for (const [stage, count] of stageCounts) {
-      if (count > 0) {
-        await supabase
-          .from('dimension_stages')
-          .update({ last_updated: dateStr })
-          .eq('stage', stage)
+    for (const [stage, cnt] of stageCounts) {
+      if (cnt > 0) {
+        await db
+          .update(dimensionStages)
+          .set({ lastUpdated: dateStr })
+          .where(eq(dimensionStages.stage, stage))
       }
     }
 
@@ -294,58 +369,77 @@ export async function GET(request: Request) {
       const weekLabel = `${dateObj.getFullYear()}-W${String(weekNumber).padStart(2, '0')}`
 
       // Fetch week's aggregates
-      const { data: weekAggregates } = await supabase
-        .from('daily_aggregates')
-        .select('*')
-        .gte('date', weekStartStr)
-        .lte('date', dateStr)
-        .is('campaign_id', null) // Overall aggregates
+      const weekAggregatesData = await db
+        .select()
+        .from(dailyAggregates)
+        .where(and(
+          gte(dailyAggregates.date, weekStartStr),
+          lte(dailyAggregates.date, dateStr),
+          isNull(dailyAggregates.campaignId),
+        ))
 
-      if (weekAggregates && weekAggregates.length > 0) {
+      if (weekAggregatesData.length > 0) {
         // Group by source
-        const bySource = new Map<string | null, typeof weekAggregates>()
+        const bySource = new Map<string | null, typeof weekAggregatesData>()
 
-        for (const agg of weekAggregates) {
-          const source = agg.source as string | null
-          if (!bySource.has(source)) {
-            bySource.set(source, [])
+        for (const agg of weekAggregatesData) {
+          const src = agg.source as string | null
+          if (!bySource.has(src)) {
+            bySource.set(src, [])
           }
-          bySource.get(source)!.push(agg)
+          bySource.get(src)!.push(agg)
         }
 
-        const weeklyTrendsToUpsert = []
-
-        for (const [source, aggs] of bySource) {
+        for (const [src, aggs] of bySource) {
           const totals = aggs.reduce((acc, agg) => ({
-            new_leads: acc.new_leads + (agg.new_members || 0),
-            new_hand_raisers: acc.new_hand_raisers + (agg.new_hand_raisers || 0),
-            new_qualified: acc.new_qualified + (agg.new_qualified_premium || 0) + (agg.new_qualified_vip || 0),
-            new_clients: acc.new_clients + (agg.new_premium || 0) + (agg.new_vip || 0),
-            total_revenue: acc.total_revenue + (agg.total_revenue || 0),
-            ad_spend: acc.ad_spend + (agg.ad_spend || 0),
+            newLeads: acc.newLeads + (agg.newLeads || 0),
+            newHandRaisers: acc.newHandRaisers + (agg.newHandRaisers || 0),
+            newQualified: acc.newQualified + (agg.newQualified || 0),
+            newClients: acc.newClients + (agg.newPremium || 0) + (agg.newVip || 0),
+            totalRevenue: acc.totalRevenue + Number(agg.totalRevenue || 0),
+            adSpend: acc.adSpend + Number(agg.adSpend || 0),
           }), {
-            new_leads: 0,
-            new_hand_raisers: 0,
-            new_qualified: 0,
-            new_clients: 0,
-            total_revenue: 0,
-            ad_spend: 0,
+            newLeads: 0,
+            newHandRaisers: 0,
+            newQualified: 0,
+            newClients: 0,
+            totalRevenue: 0,
+            adSpend: 0,
           })
 
-          weeklyTrendsToUpsert.push({
-            week_start: weekStartStr,
-            week_number: weekLabel,
-            source,
-            campaign_id: null,
-            ...totals,
-            cost_per_lead: totals.new_leads > 0 ? totals.ad_spend / totals.new_leads : null,
-            cost_per_client: totals.new_clients > 0 ? totals.ad_spend / totals.new_clients : null,
-          })
+          const record = {
+            weekStart: weekStartStr,
+            weekNumber: weekLabel,
+            source: src,
+            campaignId: null,
+            newLeads: totals.newLeads,
+            newHandRaisers: totals.newHandRaisers,
+            newQualified: totals.newQualified,
+            newClients: totals.newClients,
+            totalRevenue: String(totals.totalRevenue),
+            adSpend: String(totals.adSpend),
+            costPerLead: totals.newLeads > 0 ? String(totals.adSpend / totals.newLeads) : null,
+            costPerClient: totals.newClients > 0 ? String(totals.adSpend / totals.newClients) : null,
+          }
+
+          await db
+            .insert(weeklyTrends)
+            .values(record)
+            .onConflictDoUpdate({
+              target: [weeklyTrends.weekStart, weeklyTrends.source, weeklyTrends.campaignId],
+              set: {
+                weekNumber: record.weekNumber,
+                newLeads: record.newLeads,
+                newHandRaisers: record.newHandRaisers,
+                newQualified: record.newQualified,
+                newClients: record.newClients,
+                totalRevenue: record.totalRevenue,
+                adSpend: record.adSpend,
+                costPerLead: record.costPerLead,
+                costPerClient: record.costPerClient,
+              },
+            })
         }
-
-        await supabase
-          .from('weekly_trends')
-          .upsert(weeklyTrendsToUpsert, { onConflict: 'week_start,source,campaign_id' })
       }
     }
 

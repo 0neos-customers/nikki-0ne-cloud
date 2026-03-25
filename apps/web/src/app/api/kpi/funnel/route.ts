@@ -1,13 +1,13 @@
 import { NextResponse } from 'next/server'
 import { auth } from '@clerk/nextjs/server'
-import { createServerClient } from '@0ne/db/server'
+import { db, eq, gte, lte, and, or, desc, inArray, isNull, isNotNull } from '@0ne/db/server'
+import { contacts, skoolMembers } from '@0ne/db/server'
 import {
   FUNNEL_STAGE_ORDER,
   STAGE_LABELS,
   STAGE_COLORS,
   type FunnelStage,
 } from '@/features/kpi/lib/config'
-import { sanitizeForPostgrestFilter } from '@/lib/postgrest-utils'
 
 export const dynamic = 'force-dynamic'
 
@@ -42,119 +42,119 @@ export async function GET(request: Request) {
     const startDate = searchParams.get('startDate')
     const endDate = searchParams.get('endDate')
 
-    const supabase = createServerClient()
-
     // If sources filter is provided, get matching skool_user_ids from skool_members
     let skoolUserIds: string[] | null = null
     if (sources.length > 0) {
-      // Query skool_members to get user IDs with matching attribution sources
-      // Note: 'unknown' source means attribution_source IS NULL
       const hasUnknown = sources.includes('unknown')
       const otherSources = sources.filter(s => s !== 'unknown')
 
-      let skoolQuery = supabase
-        .from('skool_members')
-        .select('skool_user_id')
-
-      const safeSources = otherSources.map(sanitizeForPostgrestFilter)
-      if (hasUnknown && safeSources.length > 0) {
-        // Both unknown (NULL) and specific sources
-        skoolQuery = skoolQuery.or(`attribution_source.in.(${safeSources.join(',')}),attribution_source.is.null`)
+      let sourceFilter
+      if (hasUnknown && otherSources.length > 0) {
+        sourceFilter = or(inArray(skoolMembers.attributionSource, otherSources), isNull(skoolMembers.attributionSource))
       } else if (hasUnknown) {
-        // Only unknown (NULL)
-        skoolQuery = skoolQuery.is('attribution_source', null)
+        sourceFilter = isNull(skoolMembers.attributionSource)
       } else {
-        // Only specific sources
-        skoolQuery = skoolQuery.in('attribution_source', safeSources)
+        sourceFilter = inArray(skoolMembers.attributionSource, otherSources)
       }
 
-      const { data: skoolMembers } = await skoolQuery
-      skoolUserIds = skoolMembers?.map(m => m.skool_user_id).filter(Boolean) || []
+      const skoolMembersData = await db
+        .select({ skoolUserId: skoolMembers.skoolUserId })
+        .from(skoolMembers)
+        .where(sourceFilter)
+
+      skoolUserIds = skoolMembersData.map(m => m.skoolUserId).filter(Boolean)
     }
 
-    // Build contact query with filters
-    let contactsQuery = supabase
-      .from('contacts')
-      .select('*', { count: 'exact' })
+    // Build contact query filters
+    if (skoolUserIds !== null && skoolUserIds.length === 0) {
+      // No matching skool members, return empty results
+      return NextResponse.json({
+        funnel: {
+          stages: FUNNEL_STAGE_ORDER.map(stageId => ({
+            id: stageId,
+            name: STAGE_LABELS[stageId],
+            count: 0,
+            color: STAGE_COLORS[stageId],
+            conversionRate: null,
+          })),
+          totalContacts: 0,
+          overallConversion: 0,
+        },
+        contacts: [],
+        pagination: { total: 0, limit, offset, hasMore: false },
+        filters: { sources: [], campaigns: [], stages: FUNNEL_STAGE_ORDER.map(s => ({ id: s, name: STAGE_LABELS[s] })) },
+        sourceFilteringNote: 'No contacts found matching the selected attribution sources.',
+      })
+    }
 
-    // Apply source filter via skool_user_id join (new attribution-based filtering)
+    const contactFilters = []
     if (skoolUserIds !== null) {
-      if (skoolUserIds.length === 0) {
-        // No matching skool members, return empty results
-        return NextResponse.json({
-          funnel: {
-            stages: FUNNEL_STAGE_ORDER.map(stageId => ({
-              id: stageId,
-              name: STAGE_LABELS[stageId],
-              count: 0,
-              color: STAGE_COLORS[stageId],
-              conversionRate: null,
-            })),
-            totalContacts: 0,
-            overallConversion: 0,
-          },
-          contacts: [],
-          pagination: { total: 0, limit, offset, hasMore: false },
-          filters: { sources: [], campaigns: [], stages: FUNNEL_STAGE_ORDER.map(s => ({ id: s, name: STAGE_LABELS[s] })) },
-          sourceFilteringNote: 'No contacts found matching the selected attribution sources.',
-        })
-      }
-      contactsQuery = contactsQuery.in('skool_user_id', skoolUserIds)
+      contactFilters.push(inArray(contacts.skoolUserId, skoolUserIds))
     } else if (source) {
-      // Legacy single source filter (deprecated, uses contacts.source)
-      contactsQuery = contactsQuery.eq('source', source)
+      contactFilters.push(eq(contacts.source, source))
     }
     if (campaign) {
-      contactsQuery = contactsQuery.eq('campaign', campaign)
+      contactFilters.push(eq(contacts.campaign, campaign))
     }
     if (stage) {
-      contactsQuery = contactsQuery.eq('current_stage', stage)
+      contactFilters.push(eq(contacts.currentStage, stage))
     }
-    // Apply date range filter
     if (startDate) {
-      contactsQuery = contactsQuery.gte('created_at', startDate)
+      contactFilters.push(gte(contacts.createdAt, new Date(startDate)))
     }
     if (endDate) {
-      contactsQuery = contactsQuery.lte('created_at', endDate + 'T23:59:59')
+      contactFilters.push(lte(contacts.createdAt, new Date(endDate + 'T23:59:59')))
     }
 
-    contactsQuery = contactsQuery
-      .order('created_at', { ascending: false })
-      .range(offset, offset + limit - 1)
+    const whereClause = contactFilters.length > 0 ? and(...contactFilters) : undefined
 
-    const { data: contacts, count: totalContacts } = await contactsQuery
+    // Get count
+    const contactsCountResult = await db
+      .select({ id: contacts.id })
+      .from(contacts)
+      .where(whereClause)
 
-    // Get stage counts (without pagination)
-    let stageCountsQuery = supabase
-      .from('contacts')
-      .select('current_stage')
+    const totalContacts = contactsCountResult.length
 
-    // Apply same source filter via skool_user_id
+    // Get paginated data
+    const contactsData = await db
+      .select()
+      .from(contacts)
+      .where(whereClause)
+      .orderBy(desc(contacts.createdAt))
+      .limit(limit)
+      .offset(offset)
+
+    // Get stage counts (without pagination) - reuse same filters minus pagination
+    const stageCountFilters = []
     if (skoolUserIds !== null && skoolUserIds.length > 0) {
-      stageCountsQuery = stageCountsQuery.in('skool_user_id', skoolUserIds)
+      stageCountFilters.push(inArray(contacts.skoolUserId, skoolUserIds))
     } else if (source) {
-      stageCountsQuery = stageCountsQuery.eq('source', source)
+      stageCountFilters.push(eq(contacts.source, source))
     }
     if (campaign) {
-      stageCountsQuery = stageCountsQuery.eq('campaign', campaign)
+      stageCountFilters.push(eq(contacts.campaign, campaign))
     }
-    // Apply date range to stage counts too
     if (startDate) {
-      stageCountsQuery = stageCountsQuery.gte('created_at', startDate)
+      stageCountFilters.push(gte(contacts.createdAt, new Date(startDate)))
     }
     if (endDate) {
-      stageCountsQuery = stageCountsQuery.lte('created_at', endDate + 'T23:59:59')
+      stageCountFilters.push(lte(contacts.createdAt, new Date(endDate + 'T23:59:59')))
     }
 
-    const { data: allContacts } = await stageCountsQuery
+    const stageWhereClause = stageCountFilters.length > 0 ? and(...stageCountFilters) : undefined
+    const allContacts = await db
+      .select({ currentStage: contacts.currentStage })
+      .from(contacts)
+      .where(stageWhereClause)
 
     // Calculate stage counts - initialize from FUNNEL_STAGE_ORDER
     const stageCounts: Record<FunnelStage, number> = Object.fromEntries(
       FUNNEL_STAGE_ORDER.map((stage) => [stage, 0])
     ) as Record<FunnelStage, number>
 
-    allContacts?.forEach((contact) => {
-      const contactStage = contact.current_stage as FunnelStage
+    allContacts.forEach((contact) => {
+      const contactStage = contact.currentStage as FunnelStage
       if (contactStage && stageCounts[contactStage] !== undefined) {
         stageCounts[contactStage]++
       }
@@ -178,28 +178,28 @@ export async function GET(request: Request) {
     })
 
     // Get source breakdown
-    const { data: sourceBreakdown } = await supabase
-      .from('contacts')
-      .select('source')
+    const sourceBreakdown = await db
+      .select({ source: contacts.source })
+      .from(contacts)
 
     const sourceCountMap: Record<string, number> = {}
-    sourceBreakdown?.forEach((c) => {
+    sourceBreakdown.forEach((c) => {
       const src = c.source || 'Unknown'
       sourceCountMap[src] = (sourceCountMap[src] || 0) + 1
     })
 
     const sourcesList = Object.entries(sourceCountMap)
-      .map(([name, count]) => ({ name, count }))
+      .map(([name, cnt]) => ({ name, count: cnt }))
       .sort((a, b) => b.count - a.count)
 
     // Get campaign breakdown
-    const { data: campaignBreakdown } = await supabase
-      .from('contacts')
-      .select('campaign')
-      .not('campaign', 'is', null)
+    const campaignBreakdown = await db
+      .select({ campaign: contacts.campaign })
+      .from(contacts)
+      .where(isNotNull(contacts.campaign))
 
     const campaignCountMap: Record<string, number> = {}
-    campaignBreakdown?.forEach((c) => {
+    campaignBreakdown.forEach((c) => {
       if (c.campaign) {
         campaignCountMap[c.campaign] = (campaignCountMap[c.campaign] || 0) + 1
       }
@@ -218,50 +218,63 @@ export async function GET(request: Request) {
     let contactsByStage: ContactAtStage[] = []
     if (stage) {
       // First get contacts at the requested stage
-      let stageContactsQuery = supabase
-        .from('contacts')
-        .select('id, skool_user_id, created_at, became_hand_raiser_at, became_qualified_at, became_client_at')
-        .eq('current_stage', stage)
-        .order('created_at', { ascending: false })
-        .limit(contactsLimit)
-
-      // Apply source filter if specified
+      const stageContactFilters = [
+        eq(contacts.currentStage, stage),
+      ]
       if (skoolUserIds !== null && skoolUserIds.length > 0) {
-        stageContactsQuery = stageContactsQuery.in('skool_user_id', skoolUserIds)
+        stageContactFilters.push(inArray(contacts.skoolUserId, skoolUserIds))
       }
 
-      const { data: stageContacts } = await stageContactsQuery
+      const stageContacts = await db
+        .select({
+          id: contacts.id,
+          skoolUserId: contacts.skoolUserId,
+          createdAt: contacts.createdAt,
+          becameHandRaiserAt: contacts.becameHandRaiserAt,
+          becameQualifiedAt: contacts.becameQualifiedAt,
+          becameClientAt: contacts.becameClientAt,
+        })
+        .from(contacts)
+        .where(and(...stageContactFilters))
+        .orderBy(desc(contacts.createdAt))
+        .limit(contactsLimit)
 
-      if (stageContacts && stageContacts.length > 0) {
+      if (stageContacts.length > 0) {
         // Get the skool user IDs to fetch member details
         const contactSkoolIds = stageContacts
-          .map((c) => c.skool_user_id)
+          .map((c) => c.skoolUserId)
           .filter(Boolean) as string[]
 
         // Fetch member info from skool_members
-        const { data: skoolMembers } = await supabase
-          .from('skool_members')
-          .select('skool_user_id, display_name, email, attribution_source')
-          .in('skool_user_id', contactSkoolIds)
+        const skoolMembersData = contactSkoolIds.length > 0 ? await db
+          .select({
+            skoolUserId: skoolMembers.skoolUserId,
+            displayName: skoolMembers.displayName,
+            email: skoolMembers.email,
+            attributionSource: skoolMembers.attributionSource,
+          })
+          .from(skoolMembers)
+          .where(inArray(skoolMembers.skoolUserId, contactSkoolIds))
+          : []
 
         // Create a map for quick lookup
         const memberMap = new Map(
-          skoolMembers?.map((m) => [m.skool_user_id, m]) || []
+          skoolMembersData.map((m) => [m.skoolUserId, m])
         )
 
         // Build the response
         const now = new Date()
         contactsByStage = stageContacts.map((contact) => {
-          const member = memberMap.get(contact.skool_user_id || '')
+          const member = memberMap.get(contact.skoolUserId || '')
 
           // Determine when they entered this stage
-          let enteredAt = contact.created_at
-          if (stage === 'hand_raiser' && contact.became_hand_raiser_at) {
-            enteredAt = contact.became_hand_raiser_at
-          } else if (stage === 'qualified' && contact.became_qualified_at) {
-            enteredAt = contact.became_qualified_at
-          } else if ((stage === 'vip' || stage === 'premium') && contact.became_client_at) {
-            enteredAt = contact.became_client_at
+          let enteredAt: Date = contact.createdAt!
+          if (stage === 'hand_raiser' && contact.becameHandRaiserAt) {
+            enteredAt = contact.becameHandRaiserAt
+          } else if (stage === 'qualified' && contact.becameQualifiedAt) {
+            enteredAt = contact.becameQualifiedAt
+          } else if ((stage === 'vip' || stage === 'premium') && contact.becameClientAt) {
+            enteredAt = contact.becameClientAt
           }
 
           // Calculate days in stage
@@ -272,9 +285,9 @@ export async function GET(request: Request) {
 
           return {
             id: contact.id,
-            name: member?.display_name || 'Unknown',
+            name: member?.displayName || 'Unknown',
             email: member?.email || '',
-            source: member?.attribution_source || 'Unknown',
+            source: member?.attributionSource || 'Unknown',
             daysInStage,
             enteredAt: enteredDate.toISOString().split('T')[0],
           }
@@ -290,19 +303,19 @@ export async function GET(request: Request) {
           ? Number(((totalClients / totalMembers) * 100).toFixed(2))
           : 0,
       },
-      contacts: contacts?.map((c) => ({
+      contacts: contactsData.map((c) => ({
         id: c.id,
-        ghlContactId: c.ghl_contact_id,
-        stage: c.current_stage,
-        stageName: STAGE_LABELS[c.current_stage as FunnelStage] || c.current_stage,
+        ghlContactId: c.ghlContactId,
+        stage: c.currentStage,
+        stageName: STAGE_LABELS[c.currentStage as FunnelStage] || c.currentStage,
         source: c.source || 'Unknown',
         campaign: c.campaign,
-        creditStatus: c.credit_status,
-        leadAge: c.lead_age,
-        clientAge: c.client_age,
-        createdAt: c.created_at,
-        updatedAt: c.updated_at,
-      })) || [],
+        creditStatus: c.creditStatus,
+        leadAge: c.leadAge,
+        clientAge: c.clientAge,
+        createdAt: c.createdAt?.toISOString(),
+        updatedAt: c.updatedAt?.toISOString(),
+      })),
       pagination: {
         total: totalContacts || 0,
         limit,

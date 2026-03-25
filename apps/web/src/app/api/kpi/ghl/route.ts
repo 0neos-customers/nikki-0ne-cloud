@@ -23,7 +23,8 @@
 
 import { NextResponse } from 'next/server'
 import { auth } from '@clerk/nextjs/server'
-import { createServerClient } from '@0ne/db/server'
+import { db, eq, gte, lte, and, desc, count, ilike, arrayOverlaps, arrayContains } from '@0ne/db/server'
+import { ghlTransactions, contacts } from '@0ne/db/server'
 import { FUNNEL_STAGE_ORDER, STAGE_LABELS, STAGE_COLORS, type FunnelStage } from '@/features/kpi/lib/config'
 
 export const dynamic = 'force-dynamic'
@@ -121,55 +122,70 @@ export async function GET(request: Request) {
 
     console.log(`[GHL API] Fetching for ${startDate} to ${endDate}, prev: ${previousStartDate} to ${previousEndDate}`)
 
-    const supabase = createServerClient()
-
     // =============================================================================
     // CURRENT PERIOD TRANSACTIONS
     // =============================================================================
-    const { data: currentTransactions } = await supabase
-      .from('ghl_transactions')
-      .select('id, amount, entity_source_name, transaction_date, contact_name')
-      .eq('status', 'succeeded')
-      .gte('transaction_date', startDate)
-      .lte('transaction_date', `${endDate}T23:59:59`)
-      .order('transaction_date', { ascending: false })
+    const currentTransactions = await db
+      .select({
+        id: ghlTransactions.id,
+        amount: ghlTransactions.amount,
+        entitySourceName: ghlTransactions.entitySourceName,
+        transactionDate: ghlTransactions.transactionDate,
+        contactName: ghlTransactions.contactName,
+      })
+      .from(ghlTransactions)
+      .where(
+        and(
+          eq(ghlTransactions.status, 'succeeded'),
+          gte(ghlTransactions.transactionDate, new Date(`${startDate}T00:00:00Z`)),
+          lte(ghlTransactions.transactionDate, new Date(`${endDate}T23:59:59Z`)),
+        )
+      )
+      .orderBy(desc(ghlTransactions.transactionDate))
 
     // =============================================================================
     // PREVIOUS PERIOD TRANSACTIONS (for comparison)
     // =============================================================================
-    const { data: previousTransactions } = await supabase
-      .from('ghl_transactions')
-      .select('amount, entity_source_name')
-      .eq('status', 'succeeded')
-      .gte('transaction_date', previousStartDate)
-      .lte('transaction_date', `${previousEndDate}T23:59:59`)
+    const previousTransactions = await db
+      .select({
+        amount: ghlTransactions.amount,
+        entitySourceName: ghlTransactions.entitySourceName,
+      })
+      .from(ghlTransactions)
+      .where(
+        and(
+          eq(ghlTransactions.status, 'succeeded'),
+          gte(ghlTransactions.transactionDate, new Date(`${previousStartDate}T00:00:00Z`)),
+          lte(ghlTransactions.transactionDate, new Date(`${previousEndDate}T23:59:59Z`)),
+        )
+      )
 
     // =============================================================================
     // CALCULATE METRICS
     // =============================================================================
 
     // Current period totals by source
-    const currentTotalRevenue = currentTransactions?.reduce((sum, t) => sum + Number(t.amount), 0) || 0
+    const currentTotalRevenue = currentTransactions.reduce((sum, t) => sum + Number(t.amount), 0)
     const currentSetupFees = currentTransactions
-      ?.filter((t) => t.entity_source_name === 'PREIFM')
+      ?.filter((t) => t.entitySourceName === 'PREIFM')
       .reduce((sum, t) => sum + Number(t.amount), 0) || 0
     const currentFundingFees = currentTransactions
-      ?.filter((t) => t.entity_source_name === 'New Invoice')
+      ?.filter((t) => t.entitySourceName === 'New Invoice')
       .reduce((sum, t) => sum + Number(t.amount), 0) || 0
-    const currentTransactionCount = currentTransactions?.length || 0
+    const currentTransactionCount = currentTransactions.length
     const currentAvgTransaction = currentTransactionCount > 0
       ? currentTotalRevenue / currentTransactionCount
       : 0
 
     // Previous period totals by source
-    const previousTotalRevenue = previousTransactions?.reduce((sum, t) => sum + Number(t.amount), 0) || 0
+    const previousTotalRevenue = previousTransactions.reduce((sum, t) => sum + Number(t.amount), 0)
     const previousSetupFees = previousTransactions
-      ?.filter((t) => t.entity_source_name === 'PREIFM')
+      ?.filter((t) => t.entitySourceName === 'PREIFM')
       .reduce((sum, t) => sum + Number(t.amount), 0) || 0
     const previousFundingFees = previousTransactions
-      ?.filter((t) => t.entity_source_name === 'New Invoice')
+      ?.filter((t) => t.entitySourceName === 'New Invoice')
       .reduce((sum, t) => sum + Number(t.amount), 0) || 0
-    const previousTransactionCount = previousTransactions?.length || 0
+    const previousTransactionCount = previousTransactions.length
     const previousAvgTransaction = previousTransactionCount > 0
       ? previousTotalRevenue / previousTransactionCount
       : 0
@@ -191,38 +207,46 @@ export async function GET(request: Request) {
     const clientStages = ['premium', 'vip']
 
     // Total contacts with funnel tags (all time)
-    const { count: totalContactsCount } = await supabase
-      .from('contacts')
-      .select('*', { count: 'exact', head: true })
-      .overlaps('stages', funnelStages)
+    const [{ value: totalContactsCount }] = await db
+      .select({ value: count() })
+      .from(contacts)
+      .where(arrayOverlaps(contacts.stages, funnelStages))
 
     // New contacts in current period (by created_at)
-    const { count: newContactsCurrentCount } = await supabase
-      .from('contacts')
-      .select('*', { count: 'exact', head: true })
-      .overlaps('stages', funnelStages)
-      .gte('created_at', startDate)
-      .lte('created_at', `${endDate}T23:59:59`)
+    const [{ value: newContactsCurrentCount }] = await db
+      .select({ value: count() })
+      .from(contacts)
+      .where(
+        and(
+          arrayOverlaps(contacts.stages, funnelStages),
+          gte(contacts.createdAt, new Date(`${startDate}T00:00:00Z`)),
+          lte(contacts.createdAt, new Date(`${endDate}T23:59:59Z`)),
+        )
+      )
 
     // New contacts in previous period
-    const { count: newContactsPreviousCount } = await supabase
-      .from('contacts')
-      .select('*', { count: 'exact', head: true })
-      .overlaps('stages', funnelStages)
-      .gte('created_at', previousStartDate)
-      .lte('created_at', `${previousEndDate}T23:59:59`)
+    const [{ value: newContactsPreviousCount }] = await db
+      .select({ value: count() })
+      .from(contacts)
+      .where(
+        and(
+          arrayOverlaps(contacts.stages, funnelStages),
+          gte(contacts.createdAt, new Date(`${previousStartDate}T00:00:00Z`)),
+          lte(contacts.createdAt, new Date(`${previousEndDate}T23:59:59Z`)),
+        )
+      )
 
     // Hand raisers (contacts with hand_raiser in stages)
-    const { count: handRaisersCount } = await supabase
-      .from('contacts')
-      .select('*', { count: 'exact', head: true })
-      .contains('stages', ['hand_raiser'])
+    const [{ value: handRaisersCount }] = await db
+      .select({ value: count() })
+      .from(contacts)
+      .where(arrayContains(contacts.stages, ['hand_raiser']))
 
     // Clients (Premium + VIP)
-    const { count: clientsCount } = await supabase
-      .from('contacts')
-      .select('*', { count: 'exact', head: true })
-      .overlaps('stages', clientStages)
+    const [{ value: clientsCount }] = await db
+      .select({ value: count() })
+      .from(contacts)
+      .where(arrayOverlaps(contacts.stages, clientStages))
 
     // Calculate contact changes
     const totalContacts = totalContactsCount || 0
@@ -243,14 +267,14 @@ export async function GET(request: Request) {
     const stageDistribution: Array<{ stage: FunnelStage; count: number; label: string; color: string }> = []
 
     for (const stage of FUNNEL_STAGE_ORDER) {
-      const { count } = await supabase
-        .from('contacts')
-        .select('*', { count: 'exact', head: true })
-        .contains('stages', [stage])
+      const [{ value: stageCount }] = await db
+        .select({ value: count() })
+        .from(contacts)
+        .where(arrayContains(contacts.stages, [stage]))
 
       stageDistribution.push({
         stage,
-        count: count || 0,
+        count: stageCount || 0,
         label: STAGE_LABELS[stage],
         color: STAGE_COLORS[stage],
       })
@@ -283,38 +307,51 @@ export async function GET(request: Request) {
       const limit = Math.min(parseInt(searchParams.get('limit') || '20', 10), 100)
       const offset = parseInt(searchParams.get('offset') || '0', 10)
 
-      // Build the query
-      let query = supabase
-        .from('ghl_transactions')
-        .select('id, contact_name, entity_source_name, amount, status, transaction_date', { count: 'exact' })
-        .gte('transaction_date', startDate)
-        .lte('transaction_date', `${endDate}T23:59:59`)
-        .order('transaction_date', { ascending: false })
+      // Build filter conditions
+      const txnFilters = [
+        gte(ghlTransactions.transactionDate, new Date(`${startDate}T00:00:00Z`)),
+        lte(ghlTransactions.transactionDate, new Date(`${endDate}T23:59:59Z`)),
+      ]
 
-      // Filter by transaction type
       if (transactionType === 'setup') {
-        query = query.eq('entity_source_name', 'PREIFM')
+        txnFilters.push(eq(ghlTransactions.entitySourceName, 'PREIFM'))
       } else if (transactionType === 'funding') {
-        query = query.eq('entity_source_name', 'New Invoice')
+        txnFilters.push(eq(ghlTransactions.entitySourceName, 'New Invoice'))
       }
 
-      // Search by contact name (case-insensitive)
       if (searchTerm) {
-        query = query.ilike('contact_name', `%${searchTerm}%`)
+        txnFilters.push(ilike(ghlTransactions.contactName, `%${searchTerm}%`))
       }
 
-      // Apply pagination
-      query = query.range(offset, offset + limit - 1)
+      // Get count
+      const [{ value: txnCount }] = await db
+        .select({ value: count() })
+        .from(ghlTransactions)
+        .where(and(...txnFilters))
 
-      const { data: txnData, count: txnCount } = await query
+      // Get paginated data
+      const txnData = await db
+        .select({
+          id: ghlTransactions.id,
+          contactName: ghlTransactions.contactName,
+          entitySourceName: ghlTransactions.entitySourceName,
+          amount: ghlTransactions.amount,
+          status: ghlTransactions.status,
+          transactionDate: ghlTransactions.transactionDate,
+        })
+        .from(ghlTransactions)
+        .where(and(...txnFilters))
+        .orderBy(desc(ghlTransactions.transactionDate))
+        .limit(limit)
+        .offset(offset)
 
-      transactions = (txnData || []).map(t => ({
+      transactions = txnData.map(t => ({
         id: t.id,
-        contact_name: t.contact_name,
-        transaction_type: t.entity_source_name === 'PREIFM' ? 'Setup Fee' : t.entity_source_name === 'New Invoice' ? 'Funding Fee' : t.entity_source_name || 'Unknown',
+        contact_name: t.contactName,
+        transaction_type: t.entitySourceName === 'PREIFM' ? 'Setup Fee' : t.entitySourceName === 'New Invoice' ? 'Funding Fee' : t.entitySourceName || 'Unknown',
         amount: Number(t.amount),
-        status: t.status,
-        transaction_date: t.transaction_date,
+        status: t.status!,
+        transaction_date: t.transactionDate!.toISOString(),
       }))
       transactionsTotal = txnCount || 0
 
@@ -343,7 +380,7 @@ export async function GET(request: Request) {
       const grouped = new Map<string, { setupFees: number; fundingFees: number }>()
 
       for (const txn of currentTransactions) {
-        const txnDate = new Date(txn.transaction_date)
+        const txnDate = new Date(txn.transactionDate!)
         // Use YYYY-MM-DD for daily, YYYY-MM for monthly
         const key = useDaily
           ? txnDate.toISOString().split('T')[0]
@@ -356,9 +393,9 @@ export async function GET(request: Request) {
         const entry = grouped.get(key)!
         const amount = Number(txn.amount)
 
-        if (txn.entity_source_name === 'PREIFM') {
+        if (txn.entitySourceName === 'PREIFM') {
           entry.setupFees += amount
-        } else if (txn.entity_source_name === 'New Invoice') {
+        } else if (txn.entitySourceName === 'New Invoice') {
           entry.fundingFees += amount
         }
       }

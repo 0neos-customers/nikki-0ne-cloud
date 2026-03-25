@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createServerClient } from '@0ne/db/server'
+import { db, eq, gte, lte, asc, and } from '@0ne/db/server'
+import { skoolCommunityActivityDaily } from '@0ne/db/server'
 
 /**
  * GET /api/kpi/community-activity
@@ -12,8 +13,6 @@ import { createServerClient } from '@0ne/db/server'
  *   - range: Preset range ('30d' or '1y') - used if no explicit dates
  */
 export async function GET(request: NextRequest) {
-  const supabase = createServerClient()
-
   try {
     const { searchParams } = new URL(request.url)
     const startDateParam = searchParams.get('startDate')
@@ -43,27 +42,27 @@ export async function GET(request: NextRequest) {
     }
 
     // Fetch daily activity data
-    const { data: dailyData, error } = await supabase
-      .from('skool_community_activity_daily')
-      .select('date, activity_count, daily_active_members')
-      .eq('group_slug', 'fruitful')
-      .gte('date', startDate)
-      .lte('date', endDate)
-      .order('date', { ascending: true })
-
-    if (error) {
-      console.error('[Community Activity API] Error:', error)
-      return NextResponse.json(
-        { error: 'Failed to fetch activity data' },
-        { status: 500 }
+    const dailyData = await db
+      .select({
+        date: skoolCommunityActivityDaily.date,
+        activityCount: skoolCommunityActivityDaily.activityCount,
+        dailyActiveMembers: skoolCommunityActivityDaily.dailyActiveMembers,
+      })
+      .from(skoolCommunityActivityDaily)
+      .where(
+        and(
+          eq(skoolCommunityActivityDaily.groupSlug, 'fruitful'),
+          gte(skoolCommunityActivityDaily.date, startDate),
+          lte(skoolCommunityActivityDaily.date, endDate),
+        )
       )
-    }
+      .orderBy(asc(skoolCommunityActivityDaily.date))
 
     // Transform data
-    const daily = (dailyData || []).map((row) => ({
-      date: row.date,
-      activityCount: row.activity_count,
-      dailyActiveMembers: row.daily_active_members,
+    const daily = dailyData.map((row) => ({
+      date: row.date!,
+      activityCount: row.activityCount || 0,
+      dailyActiveMembers: row.dailyActiveMembers as number | null,
     }))
 
     // Calculate monthly aggregates for long date ranges
