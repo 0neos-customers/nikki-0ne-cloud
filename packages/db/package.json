@@ -8,19 +8,27 @@
     ".": "./src/index.ts",
     "./client": "./src/client.ts",
     "./server": "./src/server.ts",
+    "./schema": "./src/schema/index.ts",
     "./types": "./src/types/index.ts",
     "./types/kpi": "./src/types/kpi.ts",
     "./types/notifications": "./src/types/notifications.ts"
   },
   "scripts": {
-    "type-check": "tsc --noEmit"
+    "type-check": "tsc --noEmit",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "db:push": "drizzle-kit push",
+    "db:studio": "drizzle-kit studio"
   },
   "dependencies": {
+    "@neondatabase/serverless": "^0.10.0",
     "@supabase/ssr": "^0.8.0",
-    "@supabase/supabase-js": "^2.94.0"
+    "@supabase/supabase-js": "^2.94.0",
+    "drizzle-orm": "^0.38.0"
   },
   "devDependencies": {
     "@0ne/config": "workspace:*",
+    "drizzle-kit": "^0.30.0",
     "typescript": "^5.7.0"
   }
 }

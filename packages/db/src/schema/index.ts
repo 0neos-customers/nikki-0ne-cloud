@@ -1,0 +1,10 @@
+// Schema index - re-exports all tables from all domain files
+export * from './kpi'
+export * from './skool'
+export * from './scheduler'
+export * from './dm-sync'
+export * from './personal'
+export * from './notifications'
+export * from './ghl'
+export * from './telemetry'
+export * from './system'
