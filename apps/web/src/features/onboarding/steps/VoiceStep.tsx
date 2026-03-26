@@ -7,20 +7,20 @@ export function VoiceStep({ onNext, onBack, tokens, setToken }: StepProps) {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-2xl font-heading font-bold">Voice Features</h2>
+        <h2 className="text-2xl font-heading font-bold">Voice &amp; Audio</h2>
         <p className="text-muted-foreground mt-1">
-          Send voice messages to your AI and hear it talk back. Both are optional.
+          Set up speech-to-text for voice commands and text-to-speech for spoken responses.
         </p>
       </div>
 
       <div className="space-y-8">
-        {/* Groq */}
+        {/* Groq STT */}
         <div>
-          <h3 className="font-semibold mb-1">Groq — Voice Transcription (Free)</h3>
-          <p className="text-sm text-muted-foreground mb-4">Your AI can understand voice notes you send it.</p>
+          <h3 className="font-semibold mb-1">Groq — Lightning-fast speech-to-text (Free)</h3>
+          <p className="text-sm text-muted-foreground mb-4">Send voice messages and your AI understands them instantly.</p>
           <div className="rounded-xl border border-border bg-card p-6 space-y-3">
-            <Step n={1}>Go to <a href="https://console.groq.com" target="_blank" rel="noopener noreferrer" className="text-primary font-medium hover:underline">console.groq.com</a> and create a free account</Step>
-            <Step n={2}>Click <strong>API Keys</strong>, create a new key, copy it</Step>
+            <Step n={1}>Go to <a href="https://console.groq.com/keys" target="_blank" rel="noopener noreferrer" className="text-primary font-medium hover:underline">console.groq.com/keys</a> and create a free account</Step>
+            <Step n={2}>Create a new API key and copy it</Step>
           </div>
           <div className="mt-3 space-y-2">
             <label htmlFor="groq_api_key" className="text-sm font-medium leading-none">
@@ -30,28 +30,15 @@ export function VoiceStep({ onNext, onBack, tokens, setToken }: StepProps) {
           </div>
         </div>
 
-        {/* ElevenLabs */}
+        {/* Built-in TTS */}
         <div>
-          <h3 className="font-semibold mb-1">ElevenLabs — Voice Responses (Free to start)</h3>
-          <p className="text-sm text-muted-foreground mb-4">Your AI responds with a realistic voice. Free plan gives ~10 minutes/month.</p>
-          <div className="rounded-xl border border-border bg-card p-6 space-y-3">
-            <Step n={1}>Go to <a href="https://elevenlabs.io" target="_blank" rel="noopener noreferrer" className="text-primary font-medium hover:underline">elevenlabs.io</a> and create an account</Step>
-            <Step n={2}>Click your profile icon, then <strong>Profile + API key</strong>, copy</Step>
-          </div>
-          <div className="mt-3 space-y-3">
-            <div className="space-y-2">
-              <label htmlFor="elevenlabs_api_key" className="text-sm font-medium leading-none">
-                ElevenLabs API Key
-              </label>
-              <Input id="elevenlabs_api_key" value={tokens.elevenlabs_api_key || ''} onChange={e => setToken('elevenlabs_api_key', e.target.value)} placeholder="sk_..." />
-            </div>
-            <div className="space-y-2">
-              <label htmlFor="elevenlabs_voice_id" className="text-sm font-medium leading-none">
-                Voice ID (optional)
-              </label>
-              <Input id="elevenlabs_voice_id" value={tokens.elevenlabs_voice_id || ''} onChange={e => setToken('elevenlabs_voice_id', e.target.value)} placeholder="Voice ID" />
-            </div>
-          </div>
+          <h3 className="font-semibold mb-1">Text-to-Speech — Built-in by default</h3>
+          <p className="text-sm text-muted-foreground mb-2">
+            0ne uses your system&apos;s built-in text-to-speech by default. No API key needed.
+          </p>
+          <p className="text-xs text-muted-foreground/70">
+            Want premium voices? You can upgrade to ElevenLabs later via the 0neVoice skill.
+          </p>
         </div>
       </div>
 

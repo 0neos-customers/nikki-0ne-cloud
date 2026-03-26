@@ -4,9 +4,7 @@ export type OnboardingStep =
   | 'claude-account'
   | 'cloud-sync'
   | 'telegram'
-  | 'slack'
   | 'voice'
-  | 'ai-services'
   | 'ghl'
   | 'download'
   | 'verify'
@@ -28,9 +26,7 @@ export const ONBOARDING_STEPS: { id: OnboardingStep; label: string; optional?: b
   { id: 'claude-account', label: 'Claude' },
   { id: 'cloud-sync', label: 'Cloud Sync', optional: true },
   { id: 'telegram', label: 'Telegram', optional: true },
-  { id: 'slack', label: 'Slack', optional: true },
   { id: 'voice', label: 'Voice', optional: true },
-  { id: 'ai-services', label: 'AI Services', optional: true },
   { id: 'ghl', label: 'GHL', optional: true },
   { id: 'download', label: 'Download' },
   { id: 'verify', label: 'Verify' },

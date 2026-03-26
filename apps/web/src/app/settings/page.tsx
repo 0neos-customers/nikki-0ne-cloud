@@ -3,7 +3,7 @@
 import Link from 'next/link'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, Button } from '@0ne/ui'
 import { AppShell } from '@/components/shell'
-import { Shield, Users, RefreshCw, Landmark } from 'lucide-react'
+import { Shield, Users, RefreshCw, Landmark, Rocket } from 'lucide-react'
 
 export default function SettingsPage() {
   return (
@@ -81,6 +81,26 @@ export default function SettingsPage() {
               <Button variant="outline" className="w-full justify-start">
                 <Landmark className="mr-2 h-4 w-4" />
                 Manage Integrations
+              </Button>
+            </Link>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Rocket className="h-5 w-5" />
+              Onboarding
+            </CardTitle>
+            <CardDescription>
+              Manage the Get Started page and feature API keys
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <Link href="/settings/onboarding">
+              <Button variant="outline" className="w-full justify-start">
+                <Rocket className="mr-2 h-4 w-4" />
+                Onboarding Settings
               </Button>
             </Link>
           </CardContent>

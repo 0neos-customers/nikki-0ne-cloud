@@ -1,3 +1,15 @@
+/**
+ * AI Services Step (REMOVED FROM MAIN ONBOARDING)
+ *
+ * This step is no longer part of the main onboarding wizard.
+ * API keys for these services are now configured per-skill:
+ * - Gemini → ImageGen skill (GEMINI_API_KEY)
+ * - Perplexity → Research skill (PERPLEXITY_API_KEY)
+ *
+ * This file is preserved as reference for the key setup UX.
+ * See Settings > Onboarding for the full list of feature API keys.
+ */
+
 'use client'
 
 import { Button, Input } from '@0ne/ui'

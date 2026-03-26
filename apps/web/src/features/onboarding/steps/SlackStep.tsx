@@ -1,3 +1,12 @@
+/**
+ * Slack Step (REMOVED FROM MAIN ONBOARDING)
+ *
+ * Slack integration is now optional and configured separately.
+ * Set SLACK_BOT_TOKEN in .env.local or Vercel env vars.
+ *
+ * This file is preserved as reference for the setup UX.
+ */
+
 'use client'
 
 import { useState } from 'react'

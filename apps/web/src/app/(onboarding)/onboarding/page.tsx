@@ -7,9 +7,7 @@ import { WelcomeStep } from '@/features/onboarding/steps/WelcomeStep'
 import { SystemCheckStep } from '@/features/onboarding/steps/SystemCheckStep'
 import { ClaudeAccountStep } from '@/features/onboarding/steps/ClaudeAccountStep'
 import { TelegramStep } from '@/features/onboarding/steps/TelegramStep'
-import { SlackStep } from '@/features/onboarding/steps/SlackStep'
 import { VoiceStep } from '@/features/onboarding/steps/VoiceStep'
-import { AiServicesStep } from '@/features/onboarding/steps/AiServicesStep'
 import { DownloadStep } from '@/features/onboarding/steps/DownloadStep'
 import { VerifyStep } from '@/features/onboarding/steps/VerifyStep'
 import { CompleteStep } from '@/features/onboarding/steps/CompleteStep'
@@ -26,24 +24,20 @@ const STEP_COMPONENTS: Record<OnboardingStep, React.ComponentType<StepProps>> = 
   'claude-account': ClaudeAccountStep,
   'cloud-sync': () => null,  // Handled inline in system-check
   'telegram': TelegramStep,
-  'slack': SlackStep,
   'voice': VoiceStep,
-  'ai-services': AiServicesStep,
   'ghl': () => null,  // Skipped for MVP — optional
   'download': DownloadStep,
   'verify': VerifyStep,
   'complete': CompleteStep,
 }
 
-// Steps actually shown in the wizard (skip cloud-sync and ghl for cleaner flow)
+// Steps actually shown in the wizard (slack + ai-services moved to skill-level onboarding)
 const VISIBLE_STEPS: OnboardingStep[] = [
   'welcome',
   'system-check',
   'claude-account',
   'telegram',
-  'slack',
   'voice',
-  'ai-services',
   'download',
   'verify',
   'complete',

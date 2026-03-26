@@ -15,6 +15,7 @@ import {
   RefreshCw,
   Wallet,
   Wrench,
+  Rocket,
   type LucideIcon
 } from 'lucide-react'
 import { useState, useMemo } from 'react'
@@ -95,6 +96,7 @@ const accountNavigation: NavItem[] = [
     icon: Settings,
     children: [
       { name: 'Sync', href: '/settings/sync' },
+      { name: 'Onboarding', href: '/settings/onboarding' },
     ],
   },
 ]
@@ -115,6 +117,8 @@ export function Sidebar({ navigation }: SidebarProps) {
       return permissions.apps[app.appId] === true
     })
   }, [user?.publicMetadata?.permissions])
+
+  const isDismissed = (user?.publicMetadata as { onboardingDismissed?: boolean } | undefined)?.onboardingDismissed === true
 
   const toggleExpanded = (href: string) => {
     setExpandedItems(prev =>
@@ -281,6 +285,24 @@ export function Sidebar({ navigation }: SidebarProps) {
 
         {/* Main Navigation */}
         <nav className="flex-1 overflow-y-auto px-3 py-4">
+          {/* Get Started - only when not dismissed */}
+          {!isDismissed && (
+            <div className="mb-4">
+              <Link
+                href="/get-started"
+                className={cn(
+                  'flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-semibold transition-colors',
+                  pathname === '/get-started'
+                    ? 'bg-[#FF692D] text-white'
+                    : 'bg-[#FF692D]/10 text-[#FF692D] hover:bg-[#FF692D]/20'
+                )}
+              >
+                <Rocket className="h-4 w-4" />
+                Get Started
+              </Link>
+            </div>
+          )}
+
           {/* Home */}
           <div className="space-y-1">
             {defaultNavigation.map(item => renderNavItem(item))}
