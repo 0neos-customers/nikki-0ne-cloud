@@ -1,15 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { auth } from '@clerk/nextjs/server'
-import { getUserPermissions } from '@0ne/auth/permissions'
+import { getInstanceSlug, getUserPermissions } from '@0ne/auth/permissions'
 import { safeErrorResponse } from '@/lib/security'
 import { db, eq, and, desc } from '@0ne/db/server'
 import { invites } from '@0ne/db/server'
 
 export const dynamic = 'force-dynamic'
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   const { userId } = await auth.protect()
-  const permissions = await getUserPermissions(userId)
+  const slug = getInstanceSlug(request.headers.get('host') || undefined)
+  const permissions = await getUserPermissions(userId, slug)
   if (!permissions.isAdmin) {
     return NextResponse.json({ error: 'Admin access required' }, { status: 403 })
   }
@@ -28,7 +29,8 @@ export async function GET() {
 
 export async function POST(request: NextRequest) {
   const { userId } = await auth.protect()
-  const permissions = await getUserPermissions(userId)
+  const slug = getInstanceSlug(request.headers.get('host') || undefined)
+  const permissions = await getUserPermissions(userId, slug)
   if (!permissions.isAdmin) {
     return NextResponse.json({ error: 'Admin access required' }, { status: 403 })
   }

@@ -1,16 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { auth } from '@clerk/nextjs/server'
-import { getUserPermissions } from '@0ne/auth/permissions'
+import { getInstanceSlug, getUserPermissions } from '@0ne/auth/permissions'
 import { db, eq } from '@0ne/db/server'
 import { invites } from '@0ne/db/server'
 import { safeErrorResponse } from '@/lib/security'
 
 export async function DELETE(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { userId } = await auth.protect()
-  const permissions = await getUserPermissions(userId)
+  const slug = getInstanceSlug(request.headers.get('host') || undefined)
+  const permissions = await getUserPermissions(userId, slug)
   if (!permissions.isAdmin) {
     return NextResponse.json({ error: 'Admin access required' }, { status: 403 })
   }

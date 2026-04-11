@@ -1,16 +1,31 @@
 import { NextResponse } from 'next/server'
 import { auth, clerkClient } from '@clerk/nextjs/server'
-import { type AppId, getUserPermissions, DEFAULT_PERMISSIONS } from '@0ne/auth'
+import {
+  type AppId,
+  DEFAULT_PERMISSIONS,
+  getInstanceSlug,
+  getUserPermissions,
+  hasInstanceMembership,
+  readPermissions,
+  type UserPermissions,
+} from '@0ne/auth'
 
-export async function GET() {
+type PublicMetadata = {
+  permissions?: UserPermissions
+  instances?: Record<string, UserPermissions>
+} & Record<string, unknown>
+
+export async function GET(request: Request) {
   const { userId } = await auth()
 
   if (!userId) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  // Check if requesting user is admin
-  const permissions = await getUserPermissions(userId)
+  const hostname = request.headers.get('host') || undefined
+  const slug = getInstanceSlug(hostname)
+
+  const permissions = await getUserPermissions(userId, slug)
   if (!permissions.isAdmin) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
@@ -19,13 +34,17 @@ export async function GET() {
     const client = await clerkClient()
     const users = await client.users.getUserList({ limit: 100 })
 
-    const usersWithPermissions = users.data.map((user) => ({
+    const members = users.data.filter((user) =>
+      hasInstanceMembership(user.publicMetadata as PublicMetadata, slug),
+    )
+
+    const usersWithPermissions = members.map((user) => ({
       id: user.id,
       email: user.emailAddresses[0]?.emailAddress || '',
       firstName: user.firstName || '',
       lastName: user.lastName || '',
       imageUrl: user.imageUrl,
-      permissions: (user.publicMetadata?.permissions as typeof DEFAULT_PERMISSIONS) || DEFAULT_PERMISSIONS,
+      permissions: readPermissions(user.publicMetadata as PublicMetadata, slug) || DEFAULT_PERMISSIONS,
     }))
 
     return NextResponse.json({ users: usersWithPermissions })
@@ -45,8 +64,10 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  // Check if requesting user is admin
-  const permissions = await getUserPermissions(userId)
+  const hostname = request.headers.get('host') || undefined
+  const slug = getInstanceSlug(hostname)
+
+  const permissions = await getUserPermissions(userId, slug)
   if (!permissions.isAdmin) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
@@ -69,13 +90,18 @@ export async function POST(request: Request) {
 
     const client = await clerkClient()
     const targetUser = await client.users.getUser(targetUserId)
-    const currentPermissions =
-      (targetUser.publicMetadata?.permissions as typeof DEFAULT_PERMISSIONS) ||
-      DEFAULT_PERMISSIONS
+    const targetMeta = (targetUser.publicMetadata as PublicMetadata) || {}
 
-    let updatedPermissions = { ...currentPermissions }
+    if (!hasInstanceMembership(targetMeta, slug)) {
+      return NextResponse.json(
+        { error: 'Target user is not a member of this instance' },
+        { status: 400 }
+      )
+    }
 
-    // Update app permission
+    const currentPermissions = readPermissions(targetMeta, slug)
+    let updatedPermissions: UserPermissions = { ...currentPermissions }
+
     if (appId !== undefined && enabled !== undefined) {
       updatedPermissions = {
         ...updatedPermissions,
@@ -86,7 +112,6 @@ export async function POST(request: Request) {
       }
     }
 
-    // Update admin status
     if (isAdmin !== undefined) {
       updatedPermissions = {
         ...updatedPermissions,
@@ -94,10 +119,15 @@ export async function POST(request: Request) {
       }
     }
 
+    const instances = {
+      ...(targetMeta.instances || {}),
+      [slug]: updatedPermissions,
+    }
+
     await client.users.updateUser(targetUserId, {
       publicMetadata: {
-        ...targetUser.publicMetadata,
-        permissions: updatedPermissions,
+        ...targetMeta,
+        instances,
       },
     })
 

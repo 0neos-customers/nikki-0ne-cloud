@@ -1,6 +1,21 @@
 import { clerkMiddleware, createRouteMatcher } from '@clerk/nextjs/server'
 import { NextRequest, NextResponse } from 'next/server'
-import { canAccessApp, type AppId } from '@0ne/auth/permissions'
+import {
+  canAccessApp,
+  getInstanceSlug,
+  hasInstanceMembership,
+  readPermissions,
+  type AppId,
+  type UserPermissions,
+} from '@0ne/auth/permissions'
+
+type InstanceMetadata = {
+  onboardingComplete?: boolean
+  subscriptionStatus?: string
+  role?: string
+  permissions?: UserPermissions
+  instances?: Record<string, UserPermissions>
+}
 
 // Marketing site paths served on the canonical root domain
 const MARKETING_PATHS = ['/', '/install', '/diy-install', '/download', '/privacy', '/pricing', '/migrate', '/skills', '/preview']
@@ -102,18 +117,35 @@ export default clerkMiddleware(async (auth, request) => {
 
   const { userId, sessionClaims } = await auth.protect()
 
-  // Onboarding redirect: if user hasn't completed onboarding, send them there
+  const hostname = request.headers.get('host') || undefined
+  const slug = getInstanceSlug(hostname)
+  const metadata = sessionClaims?.metadata as InstanceMetadata | undefined
+
+  // Instance membership gate: user must be a member of THIS instance.
+  // Exempt: /unauthorized (the landing page for non-members), sign-out.
+  const skipMembershipCheck =
+    pathname.startsWith('/unauthorized') ||
+    pathname.startsWith('/sign-out') ||
+    pathname.startsWith('/api/public')
+
+  if (!skipMembershipCheck && !hasInstanceMembership(metadata, slug)) {
+    return NextResponse.redirect(new URL('/unauthorized', request.url))
+  }
+
+  const instancePermissions = readPermissions(metadata, slug)
+  const isInstanceAdmin = instancePermissions.isAdmin === true
+
+  // Onboarding redirect: if user hasn't completed onboarding on this instance, send them there
   const skipOnboardingCheck =
     pathname.startsWith('/api/') ||
     pathname.startsWith('/onboarding') ||
+    pathname.startsWith('/unauthorized') ||
     pathname.startsWith('/migrate-complete') ||
     pathname.startsWith('/sign-out')
 
   if (!skipOnboardingCheck) {
-    const metadata = sessionClaims?.metadata as { onboardingComplete?: boolean; permissions?: { isAdmin?: boolean } } | undefined
-    const isAdmin = metadata?.permissions?.isAdmin === true
     // Admins without onboardingComplete are treated as complete (existing users)
-    if (!metadata?.onboardingComplete && !isAdmin) {
+    if (!metadata?.onboardingComplete && !isInstanceAdmin) {
       return NextResponse.redirect(new URL('/onboarding', request.url))
     }
   }
@@ -125,28 +157,22 @@ export default clerkMiddleware(async (auth, request) => {
     pathname.startsWith('/api/') ||
     pathname.startsWith('/settings') ||
     pathname.startsWith('/sign-out') ||
+    pathname.startsWith('/unauthorized') ||
     pathname.startsWith('/subscription-required') ||
     pathname.startsWith('/onboarding') ||
     pathname.startsWith('/migrate-complete')
 
   if (!skipSubscriptionCheck) {
-    const metadata = sessionClaims?.metadata as {
-      subscriptionStatus?: string
-      role?: string
-      permissions?: { isAdmin?: boolean }
-    } | undefined
-    const isAdmin = metadata?.role === 'admin' || metadata?.role === 'owner' || metadata?.permissions?.isAdmin === true
+    const hasPrivilegedRole = metadata?.role === 'admin' || metadata?.role === 'owner'
     const status = metadata?.subscriptionStatus
-    // Only enforce if subscriptionStatus is explicitly set and NOT active.
-    // If metadata has no subscriptionStatus yet (new user, no Clerk template), allow through.
-    if (status && !ACTIVE_STATUSES.includes(status) && !isAdmin) {
+    if (status && !ACTIVE_STATUSES.includes(status) && !isInstanceAdmin && !hasPrivilegedRole) {
       return NextResponse.redirect(new URL('/subscription-required', request.url))
     }
   }
 
   for (const [route, appId] of Object.entries(appRoutes)) {
     if (pathname.startsWith(route)) {
-      const hasAccess = await canAccessApp(userId, appId)
+      const hasAccess = await canAccessApp(userId, appId, slug)
       if (!hasAccess) {
         return NextResponse.redirect(new URL('/unauthorized', request.url))
       }
