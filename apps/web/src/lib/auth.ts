@@ -19,7 +19,9 @@ import { betterAuth } from 'better-auth'
 import { drizzleAdapter } from 'better-auth/adapters/drizzle'
 import { organization, twoFactor } from 'better-auth/plugins'
 import bcrypt from 'bcryptjs'
-import { db } from '@0ne/db/server'
+import { randomUUID } from 'node:crypto'
+import { db, eq, and } from '@0ne/db/server'
+import { member, organization as organizationTable } from '@0ne/db/server'
 import { sendEmail } from './email'
 
 const baseURL = process.env.BETTER_AUTH_URL || process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
@@ -102,6 +104,42 @@ export const auth = betterAuth({
       allowPasswordless: true,
     }),
   ],
+
+  // Auto-promote the instance owner and platform admin to admin member on
+  // first sign-in. The orchestrator seeds the organization row + platform
+  // admin credential up front, but the owner's user row doesn't exist until
+  // they actually sign in (via Google OAuth or email/password). This hook
+  // closes that gap so they land inside the app as admin.
+  databaseHooks: {
+    user: {
+      create: {
+        after: async (user: { id: string; email: string }) => {
+          const ownerEmail = process.env.NEXT_PUBLIC_INSTANCE_OWNER_EMAIL?.toLowerCase()
+          const platformAdmin = process.env.NEXT_PUBLIC_PLATFORM_ADMIN_EMAIL?.toLowerCase()
+          const email = user.email.toLowerCase()
+          if (email !== ownerEmail && email !== platformAdmin) return
+
+          const [org] = await db.select().from(organizationTable).limit(1)
+          if (!org) return
+
+          const existing = await db
+            .select()
+            .from(member)
+            .where(and(eq(member.organizationId, org.id), eq(member.userId, user.id)))
+            .limit(1)
+          if (existing.length > 0) return
+
+          await db.insert(member).values({
+            id: randomUUID(),
+            organizationId: org.id,
+            userId: user.id,
+            role: 'admin',
+            createdAt: new Date(),
+          })
+        },
+      },
+    },
+  },
 
   session: {
     expiresIn: 60 * 60 * 24 * 7, // 7 days
